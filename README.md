@@ -50,7 +50,7 @@ claude
 
 ## 已知限制
 
-- Claude App 的雲端對話裡，外掛的 toast 與 ui.log 看不到；面板與輸入框上方的按鈕在 App 是否顯示尚未驗證（第 2 階段）。
+- Claude App 的雲端對話裡，外掛的 toast 與 ui.log 看不到；面板也畫不出來（已驗證：`$.ui.open` 回 `no-surface: no surface is attached`），輸入框上方的按鈕應該也一樣。在 App 裡請用 `/fupan` 的文字指令；面板與按鈕只在終端機有（第 2 階段處理）。
 - 帳本與快照只在本機（或容器）的 `~/.claude/retro/`，不會同步（第 2 階段會接 Notion）。
 - 一般 claude.ai 聊天的個人偏好與 Skill 還沒做（第 3 階段）。
 - 找 JEV 的方式：在 `CLAUDE_CODE_PLUGIN_DIRS` 與 `~/.claude` 底下找 `scripts/jev.py`，找不到就當沒裝。
