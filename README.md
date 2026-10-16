@@ -100,6 +100,11 @@ dirs = [x for x in env.get("CLAUDE_CODE_PLUGIN_DIRS", "").split(":") if x]
 if "/home/user/plugins/retro" not in dirs:
     dirs.append("/home/user/plugins/retro")
 env["CLAUDE_CODE_PLUGIN_DIRS"] = ":".join(dirs)
+# Setup script 不一定每個 session 都重跑：開對話時先把 fupan 更新到最新版
+cmd = "git -C /home/user/plugins/retro pull -q --ff-only origin main 2>/dev/null || true"
+starts = d.setdefault("hooks", {}).setdefault("SessionStart", [])
+if not any(h.get("command") == cmd for s in starts for h in s.get("hooks", [])):
+    starts.append({"hooks": [{"type": "command", "command": cmd}]})
 p.parent.mkdir(parents=True, exist_ok=True)
 p.write_text(json.dumps(d, indent=2))
 # 要同步到 Notion 才需要：換成你的「復盤帳本」資料庫網址

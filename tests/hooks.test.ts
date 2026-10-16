@@ -257,3 +257,25 @@ test('/fupan 復盤前先跟 Notion 拉一次，再交給模型', async ($, on) 
   // 拉下來的事件已合併進帳本
   expect(JSON.parse(w.writes['/home/u/.claude/retro/ledger.json']!).events[0].id).toBe('ev_remote')
 })
+
+test('雲端：/fupan 同步 用 Notion 上真實格式的套用事件，把規則補回 ~/.claude/CLAUDE.md', async ($, on) => {
+  const w = setup(on, { isCloud: true })
+  w.writes['/home/u/.claude/retro/notion.json'] = JSON.stringify({
+    database: DB, dataSourceId: '3df503d3-10f1-4a72-b655-a9819a0045e0',
+    viewUrl: 'https://www.notion.so/e0ec8fd62e61450a84be3fe7d28206f5?v=912435fed7ff4466ac5fe7253b65d22b', server: 'Notion',
+  })
+  // 從 Notion 實際讀回來的兩列（檔案欄被轉成 Markdown）
+  const rows = [
+    { 事件ID: 'ev_1', 類型: '糾正', 規則ID: 'r_zh', 規則: '回覆一律用繁體中文', 原話: '又用英文<br><br>講過了', 檔案: '', 'date:時間:start': '2026-10-16T08:13:00.000Z' },
+    { 事件ID: 'ap_1', 類型: '套用', 規則ID: 'r_zh', 規則: '回覆一律用繁體中文', 原話: '- 回覆一律用繁體中文，標題也用中文，不用英文標題。',
+      檔案: '\\~/.claude/[CLAUDE.md](http://CLAUDE.md)', 'date:時間:start': '2026-10-16T08:35:00.000Z' },
+  ]
+  on('mcp.call', ($, e) => {
+    const body = e.tool === 'notion-query-data-sources' ? JSON.stringify({ results: rows, has_more: false }) : '{}'
+    return { value: { content: [{ type: 'text', text: body }], isError: false } as never }
+  })
+  on('ui.invalidate', () => ({ value: undefined }) as never)
+  const reply = await runFupan($, '同步')
+  expect(reply).toContain('已把套用過的規則補回')
+  expect(w.writes['/home/u/.claude/CLAUDE.md']).toBe('- 回覆一律用繁體中文，標題也用中文，不用英文標題。\n')
+})
