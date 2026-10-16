@@ -7,6 +7,8 @@ export type FupanArgs =
   | { action: 'help' }
   | { action: 'probe' } // 測試哪些提示在這個環境看得到
   | { action: 'previous' | 'dismiss' } // 上一個沒復盤的對話：復盤／不用
+  | { action: 'sync' } // 現在跟 Notion 同步
+  | { action: 'notion'; url: string } // 設定 Notion 的復盤帳本
 
 const VERBS: Record<string, 'preview' | 'apply' | 'skip'> = {
   預覽: 'preview', preview: 'preview',
@@ -20,13 +22,15 @@ export const parseFupanArgs = (args: string): FupanArgs => {
   if (words[0] === '測試顯示' || words[0] === 'probe') return { action: 'probe' }
   if (words[0] === '上一個' || words[0] === 'previous') return { action: 'previous' }
   if (words[0] === '不用' || words[0] === 'dismiss') return { action: 'dismiss' }
+  if (words[0] === '同步' || words[0] === 'sync') return { action: 'sync' }
+  if (words[0]?.toLowerCase() === 'notion') return words[1] ? { action: 'notion', url: words[1] } : { action: 'help' }
   const verb = VERBS[words[0]!.toLowerCase()]
   const n = Number(words[1])
   if (!verb || !Number.isInteger(n) || n < 1) return { action: 'help' }
   return { action: verb, n }
 }
 
-export const HELP = '用法：/fupan（復盤這段對話）、/fupan 上一個、/fupan 不用、/fupan 預覽 N、/fupan 套用 N、/fupan 略過 N'
+export const HELP = '用法：/fupan（復盤這段對話）、/fupan 上一個、/fupan 不用、/fupan 預覽 N、/fupan 套用 N、/fupan 略過 N、/fupan 同步、/fupan notion <網址>'
 
 export const formatReview = (r: Review): string => {
   const lines: string[] = []

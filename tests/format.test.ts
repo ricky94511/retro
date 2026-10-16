@@ -49,3 +49,10 @@ test('/fupan 測試顯示：測試哪些提示看得到', () => {
   expect(parseFupanArgs('測試顯示')).toEqual({ action: 'probe' })
   expect(parseFupanArgs('probe')).toEqual({ action: 'probe' })
 })
+
+test('/fupan 同步、/fupan notion <網址>', () => {
+  expect(parseFupanArgs('同步')).toEqual({ action: 'sync' })
+  expect(parseFupanArgs('sync')).toEqual({ action: 'sync' })
+  expect(parseFupanArgs('notion https://app.notion.com/p/abc')).toEqual({ action: 'notion', url: 'https://app.notion.com/p/abc' })
+  expect(parseFupanArgs('notion')).toEqual({ action: 'help' })
+})

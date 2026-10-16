@@ -5,7 +5,8 @@ import type { Band, Review, Suggestion } from '../types'
 import { countSkillUses, absolute, memoryPath } from './lib/context'
 import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
 import { isCandidate, hasKeyword, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_THRESHOLD } from './lib/detect'
-import { addCorrection, dueEntries, markApplied, markSkipped, parseLedger, type Due, type Ledger } from './lib/ledger'
+import { addCorrection, dueEntries, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
+import { PUSH_BATCH, SERVERS, fromNotion, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, latestUnreviewed, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
 import { DONE_OPTIONS, dialogFor, enqueue, noticeContext, previousNotice, reactionFor, thresholdNotice, type Notice } from './lib/notice'
@@ -41,7 +42,7 @@ const notify = async ($: EngineInterface, n: Notice) => {
 }
 
 function newId() {
-  return `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+  return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
 const sh = async ($: EngineInterface, script: string) => {
@@ -71,6 +72,25 @@ const loadLedger = async ($: EngineInterface): Promise<Ledger> =>
 
 const saveLedger = async ($: EngineInterface, ledger: Ledger) =>
   writeJson($, `${await retroDir($)}/ledger.json`, ledger)
+
+// 帳本的「讀→改→寫」一次只跑一個：偵測、套用、Notion 同步可能同時發生
+let ledgerQueue: Promise<unknown> = Promise.resolve()
+const updateLedger = ($: EngineInterface, change: (l: Ledger) => Ledger): Promise<Ledger> => {
+  const run = ledgerQueue.then(async () => {
+    const next = change(await loadLedger($))
+    await saveLedger($, next)
+    return next
+  })
+  ledgerQueue = run.catch(() => undefined)
+  return run
+}
+
+// 本機還是雲端：雲端 session 有 CLAUDE_CODE_REMOTE_SDK_URL
+let source: Source | undefined
+const sourceOf = async ($: EngineInterface): Promise<Source> => {
+  source ??= (await sh($, 'printf %s "${CLAUDE_CODE_REMOTE_SDK_URL:-}"')) ? '雲端' : '本機'
+  return source
+}
 
 const snapshotPath = async ($: EngineInterface, id: string) => `${await retroDir($)}/sessions/${id}.json`
 
@@ -122,21 +142,28 @@ const detect = async ($: EngineInterface, text: string) => {
   const known = verdict.entryId !== null && ledger.entries.some(e => e.id === verdict.entryId)
   const rule = verdict.rule || redact(text).slice(0, 80)
   const at = Date.now()
-  const { ledger: next, crossed } = addCorrection(
-    ledger,
-    {
-      entryId: known ? verdict.entryId ?? undefined : undefined,
-      rule,
-      quote: quote(text),
-      sessionId: snapshotId,
-      project,
-      at,
-      eventId: `ev_${at.toString(36)}_${seq++}`,
-    },
-    newId,
-  )
-  await saveLedger($, next)
+  const from = await sourceOf($)
+  let crossed = false
+  const next = await updateLedger($, l => {
+    const r = addCorrection(
+      l,
+      {
+        entryId: known ? verdict.entryId ?? undefined : undefined,
+        rule,
+        quote: quote(text),
+        sessionId: snapshotId,
+        project,
+        at,
+        eventId: `ev_${at.toString(36)}_${seq++}_${Math.random().toString(36).slice(2, 6)}`,
+        source: from,
+      },
+      newId,
+    )
+    crossed = r.crossed
+    return r.ledger
+  })
   corrections += 1
+  void push($)
   if (crossed) {
     const entry = next.entries.find(e => e.count === 3 && (known ? e.id === verdict.entryId : e.rule === rule))
     await notify($, thresholdNotice(entry?.id ?? rule, entry?.rule ?? rule))
@@ -288,14 +315,122 @@ const showPreview = async ($: EngineInterface, s: Suggestion) => {
   await update($, review, r => (r ? { ...r, previews: { ...r.previews, [s.id]: lines } } : r))
 }
 
+// ── Notion 同步 ──
+// 資料庫網址：環境變數 FUPAN_NOTION_DB，或 /fupan notion <網址> 存在 ~/.claude/retro/notion.json
+type Notion = NotionConfig & { server: string }
+let notion: Notion | null | undefined
+let syncQueue: Promise<unknown> = Promise.resolve()
+
+const notionPath = async ($: EngineInterface) => `${await retroDir($)}/notion.json`
+
+const callNotion = async ($: EngineInterface, servers: readonly string[], tool: string, args: Record<string, unknown>) => {
+  for (const server of servers) {
+    try {
+      const r = await $.mcp.call(server, tool, args)
+      if (!r.isError) return { server, content: r.content as { type: string; text?: string }[] }
+    } catch {
+      // 這個名稱沒連上，試下一個
+    }
+  }
+  return null
+}
+
+// 找出資料庫的 data source 與 view；結果存檔，下次不用再問
+const loadNotion = async ($: EngineInterface, given?: string): Promise<Notion | null> => {
+  if (notion !== undefined && !given) return notion
+  const savedText = await readText($, await notionPath($))
+  let saved: Partial<Notion> = {}
+  try {
+    saved = savedText ? (JSON.parse(savedText) as Partial<Notion>) : {}
+  } catch {
+    saved = {}
+  }
+  const database = given || (await sh($, 'printf %s "${FUPAN_NOTION_DB:-}"')) || saved.database
+  if (!database) return (notion = null)
+  if (saved.database === database && saved.dataSourceId && saved.viewUrl && saved.server) return (notion = saved as Notion)
+  const r = await callNotion($, SERVERS, 'notion-fetch', { id: database })
+  const block = r?.content.find(c => c.type === 'text')?.text ?? ''
+  const cfg = r ? parseDatabase(database, block) : null
+  if (!r || !cfg) return (notion = null)
+  notion = { ...cfg, server: r.server }
+  await writeJson($, await notionPath($), notion)
+  return notion
+}
+
+// 拉：把 Notion 上的事件合併進本機帳本
+const pull = async ($: EngineInterface, cfg: Notion): Promise<number | null> => {
+  const events: Event[] = []
+  let cursor: string | null = null
+  for (let page = 0; page < 50; page++) {
+    const data: Record<string, unknown> = { mode: 'view', view_url: cfg.viewUrl, page_size: 100 }
+    if (cursor) data.start_cursor = cursor
+    const r = await callNotion($, [cfg.server], 'notion-query-data-sources', { data })
+    if (!r) return null
+    const { rows, next } = parsePage(resultJson(r.content))
+    events.push(...rows.map(fromNotion).filter((e): e is Event => e !== null))
+    if (!next) break
+    cursor = next
+  }
+  await updateLedger($, l => mergeEvents(l, events))
+  return events.length
+}
+
+// 推：把還沒上 Notion 的事件建成新的列
+const pushNow = async ($: EngineInterface, cfg: Notion): Promise<number> => {
+  const ledger = await loadLedger($)
+  const waiting = ledger.events.filter(e => ledger.unsynced.includes(e.id))
+  let pushed = 0
+  for (let i = 0; i < waiting.length; i += PUSH_BATCH) {
+    const batch = waiting.slice(i, i + PUSH_BATCH)
+    const r = await callNotion($, [cfg.server], 'notion-create-pages', {
+      parent: { data_source_id: cfg.dataSourceId },
+      pages: batch.map(e => ({ properties: toNotion(e) })),
+      allow_async: false,
+    })
+    if (!r) break // 推不上去就留著，下次再補
+    await updateLedger($, l => markSynced(l, batch.map(e => e.id)))
+    pushed += batch.length
+  }
+  return pushed
+}
+
+// 同步一次只跑一個；沒設定 Notion 就什麼都不做
+const queueSync = <T,>(job: () => Promise<T>): Promise<T> => {
+  const run = syncQueue.then(job)
+  syncQueue = run.catch(() => undefined)
+  return run
+}
+
+const push = ($: EngineInterface) =>
+  queueSync(async () => {
+    const cfg = await loadNotion($)
+    return cfg ? pushNow($, cfg) : 0
+  }).catch(() => 0)
+
+type SyncResult = { status: 'off' } | { status: 'failed' } | { status: 'ok'; pulled: number; pushed: number }
+
+const sync = ($: EngineInterface, given?: string): Promise<SyncResult> =>
+  queueSync(async (): Promise<SyncResult> => {
+    const cfg = await loadNotion($, given)
+    if (!cfg) return given ? { status: 'failed' } : { status: 'off' }
+    const pulled = await pull($, cfg)
+    if (pulled === null) return { status: 'failed' }
+    return { status: 'ok', pulled, pushed: await pushNow($, cfg) }
+  }).catch((): SyncResult => ({ status: 'failed' }))
+
+const syncText = (r: SyncResult): string =>
+  r.status === 'off'
+    ? '還沒設定 Notion。用 /fupan notion <復盤帳本資料庫的網址> 設定，或設環境變數 FUPAN_NOTION_DB。'
+    : r.status === 'failed'
+      ? '連不上 Notion 的「復盤帳本」：確認 Notion 連接器有連上、網址正確。事件先存在本機，下次再補推。'
+      : `已同步：Notion 上有 ${r.pulled} 個事件，推上 ${r.pushed} 個新事件。`
+
 // 套用／略過後回寫帳本；套用的條目記下寫在哪個檔案
 const finish = async ($: EngineInterface, s: Suggestion, how: 'applied' | 'skipped', file?: string) => {
-  const ledger = await loadLedger($)
-  const next = how === 'applied'
-    ? markApplied(ledger, s.evidence.entryId, file ?? '', s.evidence.quotes.at(-1) ?? null)
-    : markSkipped(ledger, s.evidence.entryId)
-  await saveLedger($, next)
+  const m = { sessionId: snapshotId, project, source: await sourceOf($) }
+  await updateLedger($, l => (how === 'applied' ? markApplied(l, s.evidence.entryId, file ?? '', m) : markSkipped(l, s.evidence.entryId, m)))
   await markDone($, s, how)
+  void push($)
 }
 
 const act = async ($: EngineInterface, s: Suggestion, isPreviewed: boolean): Promise<string> => {
@@ -420,6 +555,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     project = e.cwd
     await syncSession($)
+    void sync($)
     await $.command.register({ name: 'fupan', description: '復盤這段對話：找出糾正，提議 CLAUDE.md／skill／設定的修改' })
 
     // 上一個沒復盤的對話：問一次
@@ -477,6 +613,8 @@ export const register: Register = on => {
       const surfaces = await $.session.surfaces()
       return { text: `已發出 toast、ui.log、狀態列各一則（畫面：${surfaces.length ? surfaces.join('、') : '沒有'}）。看到哪幾則？` }
     }
+    if (args.action === 'sync') return { text: syncText(await sync($)) }
+    if (args.action === 'notion') return { text: syncText(await sync($, args.url)) }
     if (args.action === 'previous' || args.action === 'dismiss') {
       const old = latestUnreviewed(await loadSnapshots($), snapshotId)
       if (!old) return { text: '沒有還沒復盤的上一個對話。' }

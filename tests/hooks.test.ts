@@ -99,10 +99,10 @@ test('Haiku 說不是習慣糾正 → 不記', async ($, on) => {
 })
 
 // 帳本裡已有一條糾正 2 次的規則，這句是第 3 次
-const twice = JSON.stringify({
-  entries: [{ id: 'e1', rule: '標題用中文', count: 2, quotes: ['a', 'b'], status: { kind: 'accumulating' } }],
-  events: [],
+const correction = (id: string, quote: string) => ({
+  id, at: 1, kind: 'correct', entryId: 'e1', rule: '標題用中文', sessionId: 's0', project: '/proj', quote, file: '', source: '本機',
 })
+const twice = JSON.stringify({ events: [correction('ev1', 'a'), correction('ev2', 'b')], unsynced: [] })
 const third = '{"isHabit": true, "entryId": "e1", "rule": "標題用中文"}'
 
 test('沒有畫面（雲端）：回答結束後跳對話框；對話框打不開就在下一次回答最後加一行，只加一次', async ($, on) => {
@@ -155,4 +155,57 @@ test('真的換了對話：上一個沒復盤、有糾正的對話要問', async
   w.writes[`${SESSIONS}/s1.json`] = snapshot('s1')
   await startAndFinishTurn($, on)
   expect(w.contexts.at(-1)).toContain('上一個對話（1 輪，糾正 1 次）')
+})
+
+// ── Notion 同步 ──
+const DB = 'https://app.notion.com/p/e0ec8fd62e61450a84be3fe7d28206f5'
+const FETCHED = '<data-source url="{{collection://3df503d3-10f1-4a72-b655-a9819a0045e0}}"> <view url="{{view://912435fe-d7ff-4466-ac5f-e7253b65d22b}}">'
+const remoteRow = {
+  事件ID: 'ev_remote', 類型: '糾正', 規則ID: 'e1', 規則: '標題用中文', 原話: '雲端那句', 專案: '/proj', 對話: 's9',
+  來源: '雲端', 檔案: '', 'date:時間:start': '2026-10-16T08:00:00.000Z',
+}
+
+const notionWorld = (on: On, isUp = true) => {
+  const created: Record<string, unknown>[] = []
+  const text = (t: string) => ({ value: { content: [{ type: 'text', text: t }], isError: false } as never })
+  on('mcp.call', ($, e) => {
+    if (!isUp || e.server !== 'Notion') return { value: { content: [{ type: 'text', text: 'not connected' }], isError: true } as never }
+    if (e.tool === 'notion-fetch') return text(FETCHED)
+    if (e.tool === 'notion-query-data-sources') return text(JSON.stringify({ results: [remoteRow], has_more: false }))
+    if (e.tool === 'notion-create-pages') {
+      created.push(...((e.args as { pages: { properties: Record<string, unknown> }[] }).pages.map(p => p.properties)))
+      return text('{"pages":[]}')
+    }
+    return text('{}')
+  })
+  return created
+}
+
+const runFupan = async ($: Engine, args: string) =>
+  ((await $.command.run({ command: 'fupan', args } as never)) as { text?: string }).text ?? ''
+
+test('/fupan notion <網址>：拉下 Notion 的事件合併、推上本機還沒推的事件', async ($, on) => {
+  const w = setup(on, { ledger: JSON.stringify({ events: [correction('ev_local', '本機那句')], unsynced: ['ev_local'] }) })
+  const created = notionWorld(on)
+  expect(await runFupan($, `notion ${DB}`)).toBe('已同步：Notion 上有 1 個事件，推上 1 個新事件。')
+  expect(created.map(p => p['事件ID'])).toEqual(['ev_local'])
+  const ledger = JSON.parse(w.writes['/home/u/.claude/retro/ledger.json']!)
+  expect(ledger.events.map((e: { id: string }) => e.id).sort()).toEqual(['ev_local', 'ev_remote'])
+  expect(ledger.unsynced).toEqual([])
+  expect(ledger.entries[0].count).toBe(2)
+  // 設定存檔，下次不用再找
+  expect(JSON.parse(w.writes['/home/u/.claude/retro/notion.json']!).server).toBe('Notion')
+})
+
+test('連不上 Notion：事件留在本機，回覆說明', async ($, on) => {
+  const w = setup(on, { ledger: JSON.stringify({ events: [correction('ev_local', '本機那句')], unsynced: ['ev_local'] }) })
+  notionWorld(on, false)
+  expect(await runFupan($, `notion ${DB}`)).toContain('連不上 Notion')
+  expect(w.writes['/home/u/.claude/retro/ledger.json']).toBe(undefined) // 帳本沒動
+})
+
+test('沒設定 Notion：/fupan 同步 說怎麼設定', async ($, on) => {
+  setup(on)
+  notionWorld(on)
+  expect(await runFupan($, '同步')).toContain('還沒設定 Notion')
 })
