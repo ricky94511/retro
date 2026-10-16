@@ -21,6 +21,7 @@ export type Band = { snapshotId: string; turns: number; corrections: number }
 export type Review = {
   suggestions: Suggestion[]
   previews: Record<string, string[]>
+  done: Record<string, 'applied' | 'skipped'> // 處理過的建議留在原位，編號不變
   note: string | null
 }
 

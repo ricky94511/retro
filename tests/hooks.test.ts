@@ -1,6 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+// 測試在 bun 裡跑，有 setTimeout；mod 的型別環境沒有
+declare const setTimeout: (fn: (v?: unknown) => void, ms: number) => unknown
+
 type Engine = Parameters<Extract<Parameters<typeof test>[1], (...a: never[]) => unknown>>[0]
 
 // 外掛底下的世界：沒裝 JEV、模型回覆、帳本檔案

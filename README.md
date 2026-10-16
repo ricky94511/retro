@@ -14,6 +14,17 @@
 
 **產生建議與套用都要你觸發。** 復盤最多提 5 條建議（加規則、新 skill、改 skill、刪 skill、改設定），在「復盤」面板逐條按〔預覽改動〕〔套用〕〔略過〕。
 
+看不到面板時（例如 Claude App 的雲端對話），同樣的事用指令做，結果直接回在對話裡：
+
+| 指令 | 做什麼 |
+|---|---|
+| `/fupan` | 復盤這段對話，列出編號的建議 |
+| `/fupan 預覽 N` | 看第 N 條的前後差異（改設定一定要先預覽） |
+| `/fupan 套用 N` | 套用第 N 條 |
+| `/fupan 略過 N` | 略過第 N 條 |
+
+`preview`／`apply`／`skip` 也可以。處理過的建議留在原位，編號不會變。每次復盤的結果與面板是否畫出，記在 `~/.claude/retro/last-review.json`。
+
 ## 套用的限制
 
 - 只會直接改：`~/.claude/CLAUDE.md`、專案 `CLAUDE.md`／`CLAUDE.local.md`／`.claude/CLAUDE.md`、`~/.claude/skills/**/*.md`。

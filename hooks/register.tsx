@@ -9,6 +9,7 @@ import { addCorrection, dueEntries, markApplied, markSkipped, parseLedger, type 
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
 import { buildPrompt, parseSuggestions, type Context } from './lib/suggest'
+import { formatReview, parseFupanArgs, HELP } from './lib/format'
 
 // 復盤：偵測糾正 → 帳本 → 提議 CLAUDE.md／skill／設定的修改，面板逐條預覽、套用
 
@@ -191,8 +192,12 @@ const runReview = async ($: EngineInterface, source: 'fork' | Snapshot) => {
     await withSnapshotStatus($, source.sessionId, 'reviewed')
   }
   const suggestions = text ? parseSuggestions(text) : []
-  await update($, review, () => ({ suggestions, previews: {}, note: text ? note : '模型沒有回覆，請再試一次。' }))
-  void $.ui.open({ id: PANE, title: '復盤' })
+  const result: Review = { suggestions, previews: {}, done: {}, note: text ? note : '模型沒有回覆，請再試一次。' }
+  await update($, review, () => result)
+  const opened = await $.ui.open({ id: PANE, title: '復盤' })
+  // 留一份紀錄：App 看不到面板時可以查是沒跑完還是沒畫出來
+  await writeJson($, `${await retroDir($)}/last-review.json`, { at: Date.now(), source: source === 'fork' ? 'fork' : 'snapshot', pane: opened, review: result, raw: text })
+  return result
 }
 
 const withSnapshotStatus = async ($: EngineInterface, id: string, status: Snapshot['status']) => {
@@ -248,8 +253,8 @@ const applySuggestion = async ($: EngineInterface, s: Suggestion, isPreviewed: b
   return null
 }
 
-const dropSuggestion = async ($: EngineInterface, s: Suggestion) => {
-  await update($, review, r => (r ? { ...r, suggestions: r.suggestions.filter(x => x.id !== s.id) } : r))
+const markDone = async ($: EngineInterface, s: Suggestion, how: 'applied' | 'skipped') => {
+  await update($, review, r => (r ? { ...r, done: { ...r.done, [s.id]: how } } : r))
 }
 
 const showPreview = async ($: EngineInterface, s: Suggestion) => {
@@ -264,22 +269,24 @@ const finish = async ($: EngineInterface, s: Suggestion, how: 'applied' | 'skipp
     ? markApplied(ledger, s.evidence.entryId, file ?? '', s.evidence.quotes.at(-1) ?? null)
     : markSkipped(ledger, s.evidence.entryId)
   await saveLedger($, next)
-  await dropSuggestion($, s)
+  await markDone($, s, how)
 }
 
-const act = async ($: EngineInterface, s: Suggestion, isPreviewed: boolean) => {
+const act = async ($: EngineInterface, s: Suggestion, isPreviewed: boolean): Promise<string> => {
   const problem = await applySuggestion($, s, isPreviewed)
+  let message: string
   if (problem === 'fill') {
     // 做不到的：把完整指令填進輸入框，讓人看過再按 Enter 交給 Claude
     await $.prompt.fill({ text: `請幫我處理復盤建議「${s.title}」：${JSON.stringify(s.change)}`, mode: 'insert' })
-    update($, review, r => (r ? { ...r, note: `「${s.title}」需要你自己確認，已填進輸入框。` } : r))
-    return
+    message = `「${s.title}」不能直接改，已把指令填進輸入框，看過再按 Enter。`
+  } else if (problem) {
+    message = `「${s.title}」：${problem}`
+  } else {
+    await finish($, s, 'applied', s.change.file)
+    message = `已套用「${s.title}」（${s.change.file}）。`
   }
-  if (problem) {
-    await update($, review, r => (r ? { ...r, note: `「${s.title}」：${problem}` } : r))
-    return
-  }
-  await finish($, s, 'applied', 'file' in s.change ? s.change.file : undefined)
+  await update($, review, r => (r ? { ...r, note: message } : r))
+  return message
 }
 
 const dismissBand = async ($: EngineInterface, b: Band) => {
@@ -342,10 +349,27 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'fupan' }, async ($) => {
-    void runReview($, 'fork')
-    await $.ui.open({ id: PANE, title: '復盤' })
-    return { text: '復盤中，結果在「復盤」面板。' }
+  on('command.run', { command: 'fupan' }, async ($, e) => {
+    const args = parseFupanArgs(e.args)
+    if (args.action === 'help') return { text: HELP }
+    if (args.action === 'run') {
+      // $ 呼叫的時間不算進 hook 的預算，可以等復盤跑完再回覆（App 看不到面板，回覆一定看得到）
+      return { text: formatReview(await runReview($, 'fork')) }
+    }
+    const r = await read($, review)
+    const s = r?.suggestions[args.n - 1]
+    if (!r || !s) return { text: `沒有第 ${args.n} 條建議。先跑 /fupan。` }
+    if (r.done[s.id]) return { text: `第 ${args.n} 條已經${r.done[s.id] === 'applied' ? '套用' : '略過'}過了。` }
+    if (args.action === 'preview') {
+      await showPreview($, s)
+      const lines = (await read($, review))?.previews[s.id] ?? []
+      return { text: [`第 ${args.n} 條「${s.title}」的改動（${s.change.file}）：`, ...lines].join('\n') }
+    }
+    if (args.action === 'skip') {
+      await finish($, s, 'skipped')
+      return { text: `已略過「${s.title}」，帳本記下略過時的次數。` }
+    }
+    return { text: await act($, s, s.id in r.previews) }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -369,14 +393,14 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {r.note && <Text dimColor>{r.note}</Text>}
         {r.suggestions.length === 0 && <Text dimColor>沒有建議。</Text>}
-        {r.suggestions.map(s => (
+        {r.suggestions.filter(s => !r.done[s.id]).map(s => (
           <Box key={s.id} flexDirection="column">
             <Text>{s.kind}：{s.title}</Text>
             <Text dimColor>證據：{s.evidence.count} 次「{s.evidence.quotes.at(-1) ?? ''}」</Text>
             {(r.previews[s.id] ?? []).map((line, i) => <Text key={String(i)} dimColor>{line}</Text>)}
             <Box>
               <Button key="preview" label="預覽改動" onPress={() => showPreview($, s)} />
-              <Button key="apply" label="套用" onPress={() => act($, s, s.id in r.previews)} />
+              <Button key="apply" label="套用" onPress={() => { void act($, s, s.id in r.previews) }} />
               <Button key="skip" label="略過" onPress={() => finish($, s, 'skipped')} />
             </Box>
           </Box>
