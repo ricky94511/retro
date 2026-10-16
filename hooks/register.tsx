@@ -3,13 +3,13 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Band, Review, Suggestion } from '../types'
 
 import { countSkillUses, absolute, memoryPath } from './lib/context'
-import { isWritableMarkdown, isSettingsFile, replaceOnce, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
+import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
 import { isCandidate, hasKeyword, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_THRESHOLD } from './lib/detect'
 import { addCorrection, dueEntries, markApplied, markSkipped, parseLedger, type Due, type Ledger } from './lib/ledger'
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
 import { buildPrompt, parseSuggestions, type Context } from './lib/suggest'
-import { formatReview, parseFupanArgs, HELP } from './lib/format'
+import { formatReview, parseFupanArgs, HELP, firstChoices, afterPreviewChoices, questionHead, previewQuestion, PREVIEW, APPLY, SKIP } from './lib/format'
 
 // 復盤：偵測糾正 → 帳本 → 提議 CLAUDE.md／skill／設定的修改，面板逐條預覽、套用
 
@@ -211,10 +211,10 @@ const previewOf = async ($: EngineInterface, s: Suggestion): Promise<string[]> =
   if ('deleteSkill' in c) return [`- 移到垃圾桶：${c.file}`]
   if ('fullText' in c) return c.fullText.split('\n').map((l: string) => `+ ${l}`)
   const path = absolute(c.file, await homeDir($))
-  const before = (await readText($, path)) ?? ''
-  const after = replaceOnce(before, c.oldText, c.newText)
+  const before = await readText($, path)
+  const after = applyChange(before, c.oldText, c.newText)
   if (!after.ok) return [`（原文${after.reason === 'missing' ? '找不到' : '出現不只一次'}，不會改）`]
-  return diffLines(before, after.text)
+  return diffLines(before ?? '', after.text)
 }
 
 const applySuggestion = async ($: EngineInterface, s: Suggestion, isPreviewed: boolean): Promise<string | null> => {
@@ -235,10 +235,12 @@ const applySuggestion = async ($: EngineInterface, s: Suggestion, isPreviewed: b
   }
   const path = absolute(c.file, h)
   const current = await readText($, path)
-  if (current === undefined) return 'fill'
-  const next = replaceOnce(current, c.oldText, c.newText)
+  const isSettings = isSettingsFile(path, h, project)
+  if (!isSettings && !isWritableMarkdown(path, h, project)) return 'fill'
+  if (isSettings && (current === undefined || c.oldText === '')) return 'fill'
+  const next = applyChange(current, c.oldText, c.newText)
   if (!next.ok) return `原文${next.reason === 'missing' ? '找不到' : '出現不只一次'}，沒有改`
-  if (isSettingsFile(path, h, project)) {
+  if (isSettings && current !== undefined) {
     if (!isPreviewed) return '改設定前要先按「預覽改動」'
     await $.fs.write(backupName(path, new Date()), current)
     await $.fs.write(path, next.text)
@@ -248,7 +250,6 @@ const applySuggestion = async ($: EngineInterface, s: Suggestion, isPreviewed: b
     }
     return null
   }
-  if (!isWritableMarkdown(path, h, project)) return 'fill'
   await $.fs.write(path, next.text)
   return null
 }
@@ -287,6 +288,40 @@ const act = async ($: EngineInterface, s: Suggestion, isPreviewed: boolean): Pro
   }
   await update($, review, r => (r ? { ...r, note: message } : r))
   return message
+}
+
+// 用選的（Claude 自己的提問對話框，App 也看得到）：先三個選項，預覽後只剩套用或略過
+const decide = async ($: EngineInterface, s: Suggestion, i: number, total: number): Promise<string> => {
+  const head = questionHead(s, i, total)
+  let choice = await $.ui.ask(`${head}\n\n要怎麼處理？`, { header: '復盤', options: firstChoices(s.kind) })
+  let isPreviewed = false
+  if (choice === PREVIEW) {
+    await showPreview($, s)
+    isPreviewed = true
+    const lines = (await read($, review))?.previews[s.id] ?? []
+    choice = await $.ui.ask(previewQuestion(head, lines), { header: '復盤', options: afterPreviewChoices() })
+  }
+  if (choice === APPLY) return act($, s, isPreviewed)
+  if (choice === SKIP) {
+    await finish($, s, 'skipped')
+    return `已略過「${s.title}」。`
+  }
+  return `「${s.title}」先保留（你的回覆：${choice}）。`
+}
+
+const decideAll = async ($: EngineInterface, r: Review): Promise<string> => {
+  const open = r.suggestions.filter(s => !r.done[s.id])
+  const results: string[] = []
+  for (const [k, s] of open.entries()) {
+    try {
+      results.push(await decide($, s, k + 1, open.length))
+    } catch {
+      // 關掉對話框，或這裡不能問：剩下的留著，用文字指令處理
+      results.push('（停在這裡，剩下的可以用 /fupan 套用 N、/fupan 略過 N 處理）')
+      return [...results, '', formatReview((await read($, review)) ?? r)].join('\n')
+    }
+  }
+  return results.join('\n')
 }
 
 const dismissBand = async ($: EngineInterface, b: Band) => {
@@ -354,7 +389,9 @@ export const register: Register = on => {
     if (args.action === 'help') return { text: HELP }
     if (args.action === 'run') {
       // $ 呼叫的時間不算進 hook 的預算，可以等復盤跑完再回覆（App 看不到面板，回覆一定看得到）
-      return { text: formatReview(await runReview($, 'fork')) }
+      const r = await runReview($, 'fork')
+      if (r.suggestions.length === 0) return { text: formatReview(r) }
+      return { text: await decideAll($, r) }
     }
     const r = await read($, review)
     const s = r?.suggestions[args.n - 1]

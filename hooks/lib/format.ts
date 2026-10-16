@@ -39,3 +39,31 @@ export const formatReview = (r: Review): string => {
   lines.push('', HELP)
   return lines.join('\n')
 }
+
+// 用選的：一開始三個選項（改設定一定要先預覽，只有兩個）；預覽後只剩套用或略過
+export const PREVIEW = '預覽改動'
+export const APPLY = '套用'
+export const SKIP = '略過'
+
+export const firstChoices = (kind: string): string[] =>
+  kind === '改設定' ? [PREVIEW, SKIP] : [PREVIEW, APPLY, SKIP]
+
+export const afterPreviewChoices = (): string[] => [APPLY, SKIP]
+
+export const PREVIEW_LINES = 30
+
+// 問題的標頭：第幾條、證據、檔案
+export const questionHead = (s: { kind: string; title: string; evidence: { count: number; quotes: string[] }; change: { file: string } }, i: number, total: number): string => {
+  const q = s.evidence.quotes.at(-1)
+  return [
+    `復盤 ${i}/${total}：【${s.kind}】${s.title}`,
+    `證據：${s.evidence.count} 次${q ? `，「${q}」` : ''}`,
+    `檔案：${s.change.file}`,
+  ].join('\n')
+}
+
+export const previewQuestion = (head: string, lines: string[]): string => {
+  const shown = lines.slice(0, PREVIEW_LINES)
+  const more = lines.length > shown.length ? `\n…（還有 ${lines.length - shown.length} 行）` : ''
+  return `${head}\n\n改動：\n${shown.join('\n')}${more}\n\n要套用嗎？`
+}

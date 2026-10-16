@@ -19,7 +19,7 @@ export const buildPrompt = (c: Context): string => {
     .join('\n')
   return `你是復盤助理。依下面的帳本條目，提出最多 5 條具體改動建議。只回 JSON 陣列，每條格式：
 {"id":"s1","kind":"加規則"|"新 skill"|"改 skill"|"刪 skill"|"改設定","title":"一句話","entryId":"帳本 id","count":次數,"quotes":["原話"],
- "change":{"file":"路徑","oldText":"要替換的原文（必須在檔案裡只出現一次）","newText":"替換成的文字"}
+ "change":{"file":"路徑","oldText":"要替換的原文（必須在檔案裡只出現一次；加在檔尾就給空字串）","newText":"替換成的文字"}
    或 {"file":"新 skill 的 SKILL.md 路徑","fullText":"整份內容"}
    或 {"file":"要刪的 skill 資料夾裡的 SKILL.md"} （kind 為刪 skill）}
 改設定時 change 只寫 oldText／newText（JSON 片段），不要改金鑰。已有 skill 或規則能涵蓋的，改那個，不要重複加。

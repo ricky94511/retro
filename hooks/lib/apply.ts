@@ -24,6 +24,16 @@ export const replaceOnce = (text: string, oldText: string, newText: string): Rep
   return { ok: true, text: text.slice(0, first) + newText + text.slice(first + oldText.length) }
 }
 
+// 改動：原文空白＝加在檔尾（檔案不存在就新建）；否則原文必須只出現一次才替換
+export const applyChange = (current: string | undefined, oldText: string, newText: string): Replaced => {
+  if (oldText === '') {
+    const base = (current ?? '').trimEnd()
+    return { ok: true, text: base ? `${base}\n\n${newText}` : newText }
+  }
+  if (current === undefined) return { ok: false, reason: 'missing' }
+  return replaceOnce(current, oldText, newText)
+}
+
 // 設定檔改完必須是合法 JSON，否則還原
 export const isValidJson = (text: string): boolean => {
   try {

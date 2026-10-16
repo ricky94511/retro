@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { backupName, diffLines, isValidJson, isWritableMarkdown, replaceOnce, trashDir } from '../hooks/lib/apply'
+import { applyChange, backupName, diffLines, isValidJson, isWritableMarkdown, replaceOnce, trashDir } from '../hooks/lib/apply'
 
 const H = '/home/u'
 const P = '/home/u/proj'
@@ -35,4 +35,11 @@ test('垃圾桶：Mac 用系統垃圾桶，其他用 ~/.claude/retro/trash', () 
 
 test('預覽差異只列改掉的行', () => {
   expect(diffLines('a\nb\nc', 'a\nB\nc')).toEqual(['- b', '+ B'])
+})
+
+test('原文空白＝加在檔尾；檔案不存在就新建；有原文時照舊只換唯一一處', () => {
+  expect(applyChange(undefined, '', '- 規則')).toEqual({ ok: true, text: '- 規則' })
+  expect(applyChange('# 舊\n\n', '', '- 規則')).toEqual({ ok: true, text: '# 舊\n\n- 規則' })
+  expect(applyChange(undefined, '舊', '新')).toEqual({ ok: false, reason: 'missing' })
+  expect(applyChange('a 舊 b', '舊', '新')).toEqual({ ok: true, text: 'a 新 b' })
 })
