@@ -229,6 +229,8 @@ const contextFor = async ($: EngineInterface, due: Due[]): Promise<Context> => {
 }
 
 const runReview = async ($: EngineInterface, source: 'fork' | Snapshot) => {
+  // 復盤前先跟 Notion 同步一次，用最新的帳本（沒設定或連不上就用本機的）
+  await sync($)
   const due = dueEntries(await loadLedger($))
   const ctx = await contextFor($, due)
   const note = due.length === 0 ? '帳本沒有要處理的條目；建議只看這段對話裡的糾正。' : null

@@ -209,3 +209,27 @@ test('沒設定 Notion：/fupan 同步 說怎麼設定', async ($, on) => {
   notionWorld(on)
   expect(await runFupan($, '同步')).toContain('還沒設定 Notion')
 })
+
+test('/fupan 復盤前先跟 Notion 拉一次，再交給模型', async ($, on) => {
+  const w = setup(on)
+  w.writes['/home/u/.claude/retro/notion.json'] = JSON.stringify({
+    database: DB, dataSourceId: '3df503d3-10f1-4a72-b655-a9819a0045e0',
+    viewUrl: 'https://www.notion.so/e0ec8fd62e61450a84be3fe7d28206f5?v=912435fed7ff4466ac5fe7253b65d22b', server: 'Notion',
+  })
+  const order: string[] = []
+  on('mcp.call', ($, e) => {
+    order.push(e.tool)
+    const body = e.tool === 'notion-query-data-sources' ? JSON.stringify({ results: [remoteRow], has_more: false }) : '{}'
+    return { value: { content: [{ type: 'text', text: body }], isError: false } as never }
+  })
+  on('model.fork', () => {
+    order.push('fork')
+    return { value: { isAnswered: true, text: '[]' } as never }
+  })
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } as never }))
+  await runFupan($, '')
+  expect(order.indexOf('notion-query-data-sources')).toBeGreaterThan(-1)
+  expect(order.indexOf('notion-query-data-sources')).toBeLessThan(order.indexOf('fork'))
+  // 拉下來的事件已合併進帳本
+  expect(JSON.parse(w.writes['/home/u/.claude/retro/ledger.json']!).events[0].id).toBe('ev_remote')
+})
