@@ -211,7 +211,7 @@ const runFupan = async ($: Engine, args: string) =>
 test('/fupan notion <網址>：拉下 Notion 的事件合併、推上本機還沒推的事件', async ($, on) => {
   const w = setup(on, { ledger: JSON.stringify({ events: [correction('ev_local', '本機那句')], unsynced: ['ev_local'] }) })
   const created = notionWorld(on)
-  expect(await runFupan($, `notion ${DB}`)).toBe('已同步：Notion 上有 1 個事件，推上 1 個新事件。')
+  expect(await runFupan($, `notion ${DB}`)).toContain('已同步：Notion 上有 1 個事件，推上 1 個新事件。\n（fupan ')
   expect(created.map(p => p['事件ID'])).toEqual(['ev_local'])
   const ledger = JSON.parse(w.writes['/home/u/.claude/retro/ledger.json']!)
   expect(ledger.events.map((e: { id: string }) => e.id).sort()).toEqual(['ev_local', 'ev_remote'])
@@ -276,6 +276,28 @@ test('雲端：/fupan 同步 用 Notion 上真實格式的套用事件，把規�
   })
   on('ui.invalidate', () => ({ value: undefined }) as never)
   const reply = await runFupan($, '同步')
-  expect(reply).toContain('已把套用過的規則補回')
+  expect(reply).toContain('雲端・套用到 ~/.claude/CLAUDE.md 的規則 1 條：本來就在 0 條，這次補回 1 條')
   expect(w.writes['/home/u/.claude/CLAUDE.md']).toBe('- 回覆一律用繁體中文，標題也用中文，不用英文標題。\n')
+})
+
+test('帳本裡留著舊版讀錯的路徑：同步時以 Notion 上的為準，照樣補回', async ($, on) => {
+  // 舊版從 Notion 讀回來、沒還原的格式，已經存在本機帳本
+  const stale = {
+    id: 'ap_1', at: 2, kind: 'apply', entryId: 'r_zh', rule: '回覆一律用繁體中文', sessionId: 's0', project: '/proj',
+    quote: '- 回覆一律用繁體中文。', file: '\\~/.claude/[CLAUDE.md](http://CLAUDE.md)', source: '雲端',
+  }
+  const w = setup(on, { isCloud: true, ledger: JSON.stringify({ events: [correction('ev_1', 'a'), stale], unsynced: [] }) })
+  w.writes['/home/u/.claude/retro/notion.json'] = JSON.stringify({
+    database: DB, dataSourceId: '3df503d3-10f1-4a72-b655-a9819a0045e0',
+    viewUrl: 'https://www.notion.so/e0ec8fd62e61450a84be3fe7d28206f5?v=912435fed7ff4466ac5fe7253b65d22b', server: 'Notion',
+  })
+  const rows = [{ 事件ID: 'ap_1', 類型: '套用', 規則ID: 'r_zh', 規則: '回覆一律用繁體中文', 原話: '- 回覆一律用繁體中文。',
+    檔案: '\\~/.claude/[CLAUDE.md](http://CLAUDE.md)', 'date:時間:start': '2026-10-16T08:35:00.000Z' }]
+  on('mcp.call', ($, e) => {
+    const body = e.tool === 'notion-query-data-sources' ? JSON.stringify({ results: rows, has_more: false }) : '{}'
+    return { value: { content: [{ type: 'text', text: body }], isError: false } as never }
+  })
+  on('ui.invalidate', () => ({ value: undefined }) as never)
+  expect(await runFupan($, '同步')).toContain('這次補回 1 條')
+  expect(w.writes['/home/u/.claude/CLAUDE.md']).toBe('- 回覆一律用繁體中文。\n')
 })

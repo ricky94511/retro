@@ -26,3 +26,17 @@ export const restoreText = (current: string | undefined, rules: Restorable[]): s
   }
   return text === current ? null : `${text}\n`
 }
+
+// /fupan 同步 的狀況回報：版本、本機或雲端、CLAUDE.md 裡的規則補了幾條
+export type RestoreReport = { version: string; isCloud: boolean; total: number; present: number; added: number }
+
+export const restoreSummary = (r: RestoreReport): string => {
+  const where = r.isCloud ? '雲端' : '本機'
+  const rules =
+    !r.isCloud
+      ? '本機不補回 CLAUDE.md'
+      : r.total === 0
+        ? '沒有套用到 ~/.claude/CLAUDE.md 的規則'
+        : `套用到 ~/.claude/CLAUDE.md 的規則 ${r.total} 條：本來就在 ${r.present} 條，這次補回 ${r.added} 條`
+  return `（fupan ${r.version || '未知版本'}・${where}・${rules}）`
+}

@@ -122,8 +122,10 @@ export const markSkipped = (ledger: Ledger, id: string, m: Mark = {}): Ledger =>
 // 合併別處的事件（例如 Notion 上的）：依事件 ID 去重，重算規則；已在對方那邊的就不用再推
 export const mergeEvents = (ledger: Ledger, remote: Event[]): Ledger => {
   const known = new Set(ledger.events.map(e => e.id))
-  const remoteIds = new Set(remote.map(e => e.id))
-  const events = [...ledger.events, ...remote.filter(e => !known.has(e.id))]
+  const byId = new Map(remote.map(e => [e.id, e]))
+  const remoteIds = new Set(byId.keys())
+  // 同一個事件以 Notion 上的為準（舊版讀回來的格式可能有誤，讀一次就修正）
+  const events = [...ledger.events.map(e => byId.get(e.id) ?? e), ...remote.filter(e => !known.has(e.id))]
   return {
     entries: rebuild(events),
     events,

@@ -6,7 +6,7 @@ import { countSkillUses, absolute, memoryPath } from './lib/context'
 import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
 import { isCandidate, passesFilter, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_QUESTION } from './lib/detect'
 import { addCorrection, dueEntries, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
-import { restorable, restoreText } from './lib/restore'
+import { restorable, restoreSummary, restoreText, type RestoreReport } from './lib/restore'
 import { PUSH_BATCH, SERVERS, fromNotion, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, latestUnreviewed, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
@@ -431,18 +431,25 @@ const syncText = (r: SyncResult): string =>
 // ── 恢復 ──
 // 雲端容器每次都是新的：開對話時同步完 Notion，把已套用的規則補回 ~/.claude/CLAUDE.md。
 // 本機的檔案本來就在，而且你可能手動改過，不補。
-let restoring: Promise<string | null> = Promise.resolve(null)
+let restoring: Promise<RestoreReport | null> = Promise.resolve(null)
 
-const restore = async ($: EngineInterface): Promise<string | null> => {
-  if ((await sourceOf($)) !== '雲端') return null
+const restore = async ($: EngineInterface): Promise<RestoreReport> => {
+  const version = await sh($, `git -C "${$.plugin.root}" log -1 --format=%h 2>/dev/null`).catch(() => '')
+  const isCloud = (await sourceOf($)) === '雲端'
   const h = await homeDir($)
+  const rules = restorable(await loadLedger($), h)
+  const report: RestoreReport = { version, isCloud, total: rules.length, present: 0, added: 0 }
+  if (!isCloud) return report
   const path = `${h}/.claude/CLAUDE.md`
-  const next = restoreText(await readText($, path), restorable(await loadLedger($), h))
-  if (next === null) return null
+  const current = await readText($, path)
+  report.present = rules.filter(r => current?.includes(r.text)).length
+  const next = restoreText(current, rules)
+  if (next === null) return report
   await $.fs.write(path, next)
+  report.added = rules.length - report.present
   // 引擎可能已經讀過 CLAUDE.md：請它重問 prompt.context，下一輪就帶上補回的內容
   $.ui.invalidate('prompt.context')
-  return next
+  return report
 }
 
 // 套用／略過後回寫帳本；套用的條目記下寫在哪個檔案
@@ -651,8 +658,8 @@ export const register: Register = on => {
     if (args.action === 'sync' || args.action === 'notion') {
       const r = await sync($, args.action === 'notion' ? args.url : undefined)
       // 雲端：同步完順便把已套用的規則補回 ~/.claude/CLAUDE.md
-      const restored = r.status === 'ok' ? await restore($).catch(() => null) : null
-      return { text: syncText(r) + (restored ? '\n已把套用過的規則補回 ~/.claude/CLAUDE.md。' : '') }
+      const report = r.status === 'ok' ? await restore($).catch(() => null) : null
+      return { text: syncText(r) + (report ? `\n${restoreSummary(report)}` : '') }
     }
     if (args.action === 'previous' || args.action === 'dismiss') {
       const old = latestUnreviewed(await loadSnapshots($), snapshotId)
