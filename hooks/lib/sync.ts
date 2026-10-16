@@ -30,7 +30,20 @@ export const toNotion = (ev: Event): Record<string, string | number> => ({
   'date:時間:is_datetime': 1,
 })
 
-const text = (v: unknown): string => (typeof v === 'string' ? v : '')
+// Notion 讀回來的文字是 Markdown：換行變 <br>、特殊字元被跳脫、像網域的字（CLAUDE.md）被自動加上連結。
+// 還原成寫進去時的純文字，路徑與規則全文才對得上
+export const plain = (v: string): string =>
+  v
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/\[([^\]]*)\]\((?:https?:\/\/)?([^)]*)\)/g, (all, label: string, url: string) =>
+      url === label || url.replace(/\/$/, '') === label ? label : all,
+    )
+    .replace(/\\([\\`*_{}\[\]()#+\-.!~|>])/g, '$1')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+
+const text = (v: unknown): string => (typeof v === 'string' ? plain(v) : '')
 
 // Notion 的一列 → 事件；缺 ID 或類型不認得就丟掉（例如有人手動加的列）
 export const fromNotion = (row: Record<string, unknown>): Event | null => {

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { fromNotion, parseDatabase, parsePage, resultJson, toNotion } from '../hooks/lib/sync'
+import { fromNotion, parseDatabase, parsePage, plain, resultJson, toNotion } from '../hooks/lib/sync'
 import type { Event } from '../hooks/lib/ledger'
 
 const ev: Event = {
@@ -39,4 +39,24 @@ test('讀 view 的結果：列、下一頁游標；MCP 回覆的第一個文字�
   expect(parsePage(page)).toEqual({ rows: [{ 事件ID: 'a' }], next: 'c1' })
   expect(parsePage({ results: [], has_more: false })).toEqual({ rows: [], next: null })
   expect(resultJson([{ type: 'text', text: '不是 JSON' }])).toBe(undefined)
+})
+
+test('Notion 讀回來的 Markdown 還原成純文字：跳脫、自動連結、<br>', () => {
+  // 實際從 Notion 讀回來的值
+  expect(plain('\\~/.claude/[CLAUDE.md](http://CLAUDE.md)')).toBe('~/.claude/CLAUDE.md')
+  expect(plain('第一行<br><br>第三行')).toBe('第一行\n\n第三行')
+  expect(plain('- 回覆一律用繁體中文')).toBe('- 回覆一律用繁體中文')
+  expect(plain('a \\* b \\_c\\_ 1\\. x')).toBe('a * b _c_ 1. x')
+  // 真的連結（文字跟網址不同）保留
+  expect(plain('[說明](https://example.com/doc)')).toBe('[說明](https://example.com/doc)')
+})
+
+test('從 Notion 讀回的套用事件：檔案路徑還原後才能補回 CLAUDE.md', () => {
+  const row = {
+    事件ID: 'ap_1', 類型: '套用', 規則ID: 'r_1', 規則: '回覆用繁體中文', 原話: '- 回覆一律用繁體中文。',
+    檔案: '\\~/.claude/[CLAUDE.md](http://CLAUDE.md)', 'date:時間:start': '2026-10-16T08:35:00.000Z',
+  }
+  const ev = fromNotion(row)!
+  expect(ev.file).toBe('~/.claude/CLAUDE.md')
+  expect(ev.quote).toBe('- 回覆一律用繁體中文。')
 })

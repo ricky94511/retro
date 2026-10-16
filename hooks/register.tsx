@@ -648,8 +648,12 @@ export const register: Register = on => {
       const surfaces = await $.session.surfaces()
       return { text: `已發出 toast、ui.log、狀態列各一則（畫面：${surfaces.length ? surfaces.join('、') : '沒有'}）。看到哪幾則？` }
     }
-    if (args.action === 'sync') return { text: syncText(await sync($)) }
-    if (args.action === 'notion') return { text: syncText(await sync($, args.url)) }
+    if (args.action === 'sync' || args.action === 'notion') {
+      const r = await sync($, args.action === 'notion' ? args.url : undefined)
+      // 雲端：同步完順便把已套用的規則補回 ~/.claude/CLAUDE.md
+      const restored = r.status === 'ok' ? await restore($).catch(() => null) : null
+      return { text: syncText(r) + (restored ? '\n已把套用過的規則補回 ~/.claude/CLAUDE.md。' : '') }
+    }
     if (args.action === 'previous' || args.action === 'dismiss') {
       const old = latestUnreviewed(await loadSnapshots($), snapshotId)
       if (!old) return { text: '沒有還沒復盤的上一個對話。' }
