@@ -28,7 +28,12 @@ export const replaceOnce = (text: string, oldText: string, newText: string): Rep
 export const applyChange = (current: string | undefined, oldText: string, newText: string): Replaced => {
   if (oldText === '') {
     const base = (current ?? '').trimEnd()
-    return { ok: true, text: base ? `${base}\n\n${newText}` : newText }
+    const added = newText.replace(/^\s*\n/, '')
+    if (!base) return { ok: true, text: added }
+    // 前後都是列點就接在下一行，否則空一行
+    const isList = (line: string) => /^\s*[-*]\s/.test(line)
+    const gap = isList(base.split('\n').at(-1) ?? '') && isList(added) ? '\n' : '\n\n'
+    return { ok: true, text: `${base}${gap}${added}` }
   }
   if (current === undefined) return { ok: false, reason: 'missing' }
   return replaceOnce(current, oldText, newText)

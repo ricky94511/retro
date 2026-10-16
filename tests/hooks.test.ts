@@ -13,6 +13,7 @@ type World = {
   haikuReply: string
   ledger: string
   surfaces: string[]
+  sessionId: string
   contexts: string[]
   toasts: string[]
 }
@@ -20,7 +21,7 @@ type World = {
 const setup = (on: On, over: Partial<World> = {}): World => {
   const w: World = {
     writes: {}, haiku: [], haikuReply: '{"isHabit": true, "entryId": null, "rule": "不要用 rm -rf"}',
-    ledger: '', surfaces: [], contexts: [], toasts: [], ...over,
+    ledger: '', surfaces: [], sessionId: 's1', contexts: [], toasts: [], ...over,
   }
   const ok = (stdout: string) => ({
     value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
@@ -35,13 +36,20 @@ const setup = (on: On, over: Partial<World> = {}): World => {
     return { text: e.text }
   })
   // 只有帳本可能有內容，其他檔案都不存在
-  on('fs.read', ($, e) => ({ value: e.path.endsWith('ledger.json') ? (w.writes[e.path] ?? w.ledger) : '' }))
+  on('fs.read', ($, e) => ({ value: w.writes[e.path] ?? (e.path.endsWith('ledger.json') ? w.ledger : '') }))
   on('session.surfaces', () => ({ value: w.surfaces as never }))
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
   })
-  on('fs.list', () => ({ value: [] }))
+  // 資料夾內容：寫過的檔案
+  on('fs.list', ($, e) => ({
+    value: Object.keys(w.writes)
+      .filter(p => p.startsWith(`${e.path}/`))
+      .map(p => ({ name: p.slice(e.path.length + 1), kind: 'file', size: 0, mtimeMs: 0, isLink: false })) as never,
+  }))
+  on('session.id', () => ({ value: w.sessionId }))
+  on('session.turns', () => ({ value: 1 }))
   on('fs.write', ($, e) => {
     w.writes[e.path] = e.text
     return { value: undefined }
@@ -117,4 +125,34 @@ test('有畫面（終端機）：累積到 3 次就跳 toast，不加在回答�
   expect(w.toasts).toEqual(['復盤：「標題用中文」已糾正 3 次，可以跑 /fupan'])
   await submit($, '幫我看這個 bug')
   expect(w.contexts.at(-1)).not.toContain('已糾正 3 次')
+})
+
+const SESSIONS = '/home/u/.claude/retro/sessions'
+const snapshot = (id: string) =>
+  JSON.stringify({ sessionId: id, project: '/proj', turns: 1, corrections: 1, transcript: '用戶：不要這樣', resume: { id }, status: 'open', at: 1 })
+
+const startAndFinishTurn = async ($: Engine, on: On) => {
+  on('turn.complete', () => ({ text: '好的' }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/proj', surface: null, isInteractive: true })
+  await $.session.start({ cwd: '/proj', surface: null, isInteractive: true }) // 熱重載：session.start 再跑一次
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '好的' } as never)
+  await new Promise(r => setTimeout(r, 50))
+  await submit($, '下一句')
+}
+
+test('熱重載不是新對話：同一個 session 不會問「上一個對話要不要復盤」', async ($, on) => {
+  const w = setup(on)
+  w.writes[`${SESSIONS}/s1.json`] = snapshot('s1')
+  await startAndFinishTurn($, on)
+  expect(w.contexts.at(-1)).not.toContain('上一個對話')
+  expect(Object.keys(w.writes).filter(p => p.startsWith(SESSIONS))).toEqual([`${SESSIONS}/s1.json`])
+})
+
+test('真的換了對話：上一個沒復盤、有糾正的對話要問', async ($, on) => {
+  const w = setup(on, { sessionId: 's2' })
+  w.writes[`${SESSIONS}/s1.json`] = snapshot('s1')
+  await startAndFinishTurn($, on)
+  expect(w.contexts.at(-1)).toContain('上一個對話（1 輪，糾正 1 次）')
 })

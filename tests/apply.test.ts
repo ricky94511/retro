@@ -43,3 +43,8 @@ test('原文空白＝加在檔尾；檔案不存在就新建；有原文時照�
   expect(applyChange(undefined, '舊', '新')).toEqual({ ok: false, reason: 'missing' })
   expect(applyChange('a 舊 b', '舊', '新')).toEqual({ ok: true, text: 'a 新 b' })
 })
+
+test('加在檔尾：去掉開頭多的換行；前後都是列點就接在下一行', () => {
+  expect(applyChange('# 格式\n\n- 一\n', '', '\n- 二\n')).toEqual({ ok: true, text: '# 格式\n\n- 一\n- 二\n' })
+  expect(applyChange('# 格式\n\n說明文字', '', '- 二')).toEqual({ ok: true, text: '# 格式\n\n說明文字\n\n- 二' })
+})

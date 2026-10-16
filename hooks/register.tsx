@@ -21,10 +21,9 @@ const review = atom({ plugin: 'fupan', key: 'review' } as const, null as Review 
 // 這個 session 的狀態（重載外掛會重置，快照檔案留著）
 let home: string | undefined
 let project = ''
-let snapshotId = newId()
-let resumeId: string | undefined
+// 快照用引擎的 session id（逐字稿檔名，也是 --resume 用的）：熱重載不會變，/clear 之後才換
+let snapshotId = ''
 let transcript: string[] = []
-let turns = 0
 let corrections = 0
 let seq = 0
 let jevPath: string | null | undefined
@@ -144,16 +143,26 @@ const detect = async ($: EngineInterface, text: string) => {
   }
 }
 
+// 對上目前的 session：熱重載後接回同一份快照的逐字稿與糾正次數，換了 session（/clear）就重新開始
+const syncSession = async ($: EngineInterface) => {
+  const id = await $.session.id()
+  if (id === snapshotId) return
+  snapshotId = id
+  const saved = await loadSnapshot($, id)
+  transcript = saved?.transcript ? [saved.transcript] : []
+  corrections = saved?.corrections ?? 0
+}
+
 // 每輪結束存一份；保留已復盤、已略過的狀態
 const saveSnapshot = async ($: EngineInterface) => {
   const status = (await loadSnapshot($, snapshotId))?.status ?? 'open'
   const snap: Snapshot = {
     sessionId: snapshotId,
     project,
-    turns,
+    turns: await $.session.turns(),
     corrections,
     transcript: clipTranscript(transcript.join('\n\n')),
-    resume: { id: resumeId ?? snapshotId },
+    resume: { id: snapshotId },
     status,
     at: Date.now(),
   }
@@ -410,11 +419,7 @@ const startBandReview = async ($: EngineInterface, b: Band) => {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     project = e.cwd
-    snapshotId = newId()
-    resumeId = undefined
-    transcript = []
-    turns = 0
-    corrections = 0
+    await syncSession($)
     await $.command.register({ name: 'fupan', description: '復盤這段對話：找出糾正，提議 CLAUDE.md／skill／設定的修改' })
 
     // 上一個沒復盤的對話：問一次
@@ -424,7 +429,7 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    turns += 1
+    await syncSession($)
     transcript.push(`用戶：${e.text}`)
     if (!isCandidate(e.text, e.origin)) return next(e)
     // 在背景跑，不拖慢送出
@@ -442,6 +447,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
+    await syncSession($)
     if (done.text) transcript.push(`Claude：${done.text}`)
     await saveSnapshot($)
     // 回答結束後跳對話框（不等它，讓這一輪先結束）
@@ -450,8 +456,12 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    resumeId = e.resume.id
+    snapshotId = e.sessionId
     const snap = await saveSnapshot($)
+    // /clear 之後沒有 session.start：下一個事件再對上新的 session
+    snapshotId = ''
+    transcript = []
+    corrections = 0
     if (shouldAsk(snap)) await askAbout($, snap)
     return next(e)
   })
