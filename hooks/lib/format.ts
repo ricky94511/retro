@@ -5,6 +5,7 @@ export type FupanArgs =
   | { action: 'run' }
   | { action: 'preview' | 'apply' | 'skip'; n: number }
   | { action: 'help' }
+  | { action: 'probe' } // 測試哪些提示在這個環境看得到
 
 const VERBS: Record<string, 'preview' | 'apply' | 'skip'> = {
   預覽: 'preview', preview: 'preview',
@@ -15,6 +16,7 @@ const VERBS: Record<string, 'preview' | 'apply' | 'skip'> = {
 export const parseFupanArgs = (args: string): FupanArgs => {
   const words = args.trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return { action: 'run' }
+  if (words[0] === '測試顯示' || words[0] === 'probe') return { action: 'probe' }
   const verb = VERBS[words[0]!.toLowerCase()]
   const n = Number(words[1])
   if (!verb || !Number.isInteger(n) || n < 1) return { action: 'help' }

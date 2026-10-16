@@ -44,3 +44,8 @@ test('問題附上第幾條、證據、檔案；預覽問題附差異，太長�
   expect(q).toContain('還有 10 行')
   expect(q.endsWith('要套用嗎？')).toBe(true)
 })
+
+test('/fupan 測試顯示：測試哪些提示看得到', () => {
+  expect(parseFupanArgs('測試顯示')).toEqual({ action: 'probe' })
+  expect(parseFupanArgs('probe')).toEqual({ action: 'probe' })
+})

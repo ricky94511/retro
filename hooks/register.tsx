@@ -387,6 +387,14 @@ export const register: Register = on => {
   on('command.run', { command: 'fupan' }, async ($, e) => {
     const args = parseFupanArgs(e.args)
     if (args.action === 'help') return { text: HELP }
+    if (args.action === 'probe') {
+      // 三種提示各發一次，看這個環境哪些看得到
+      $.ui.toast('復盤測試：這是 toast')
+      $.ui.log('復盤測試：這是 ui.log')
+      $.ui.status('復盤測試：這是狀態列')
+      const surfaces = await $.session.surfaces()
+      return { text: `已發出 toast、ui.log、狀態列各一則（畫面：${surfaces.length ? surfaces.join('、') : '沒有'}）。看到哪幾則？` }
+    }
     if (args.action === 'run') {
       // $ 呼叫的時間不算進 hook 的預算，可以等復盤跑完再回覆（App 看不到面板，回覆一定看得到）
       const r = await runReview($, 'fork')
