@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { hasKeyword, isCandidate, parseJevProbability, parseVerdict } from '../hooks/lib/detect'
+import { hasKeyword, isCandidate, parseJevProbability, parseVerdict, passesFilter } from '../hooks/lib/detect'
 
 test('斜線指令與機器送的訊息不判斷，人打的才判斷', () => {
   expect(isCandidate('/fupan', { kind: 'composer' })).toBe(false)
@@ -18,6 +18,7 @@ test('關鍵字篩：中英文命中，一般句子不命中', () => {
 
 test('JEV 的機率：取 q 欄位，壞掉就 undefined', () => {
   expect(parseJevProbability('{"q": 0.83}')).toBe(0.83)
+  expect(parseJevProbability('{"q": {"type": "noul", "noul": 0.77}}')).toBe(0.77)
   expect(parseJevProbability('not json')).toBe(undefined)
 })
 
@@ -28,4 +29,11 @@ test('Haiku 回覆：取出 JSON，亂回就 null', () => {
   expect(parseVerdict('{"isHabit": true, "entryId": null, "rule": "x"}')?.entryId).toBe(null)
   expect(parseVerdict('不是 JSON')).toBe(null)
   expect(parseVerdict('{"entryId": "e1"}')).toBe(null)
+})
+
+test('JEV 信心夠或有糾正用語就往下問', () => {
+  expect(passesFilter(0.77, '標題的命名規則要套用我設定的')).toBe(true)
+  expect(passesFilter(0.51, '回覆我也說過都是回中文 也講過了')).toBe(true)
+  expect(passesFilter(0.3, '幫我看這個檔案')).toBe(false)
+  expect(passesFilter(undefined, '幫我看這個檔案')).toBe(false)
 })

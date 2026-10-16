@@ -12,7 +12,7 @@ export const isCandidate = (text: string, origin: Origin | undefined): boolean =
 
 // 中英文的糾正用語
 const KEYWORDS = [
-  /不要/, /別再/, /又/, /我說過/, /每次/, /一律/, /應該先/, /應該要/, /下次/,
+  /不要/, /別再/, /又/, /說過/, /講過/, /每次/, /一律/, /應該先/, /應該要/, /下次/,
   /\bnever\b/i, /\balways\b/i, /\bagain\b/i, /don'?t\s+(?:do|use|ever)/i, /I (?:already )?told you/i,
 ]
 
@@ -20,16 +20,22 @@ export const hasKeyword = (text: string): boolean => KEYWORDS.some(re => re.test
 
 export const JEV_THRESHOLD = 0.6
 
-// JEV ask 的輸出是 {"<題目名>": 機率}；只取 noul 題的機率
+// JEV ask 的輸出是 {"<題目名>": {"type":"noul","noul": 機率}}（舊版是 {"<題目名>": 機率}）；只取 noul 題的機率
 export const parseJevProbability = (stdout: string, name = 'q'): number | undefined => {
   try {
     const v = JSON.parse(stdout) as Record<string, unknown>
     const p = v[name]
-    return typeof p === 'number' ? p : undefined
+    if (typeof p === 'number') return p
+    const noul = (p as { noul?: unknown } | null | undefined)?.noul
+    return typeof noul === 'number' ? noul : undefined
   } catch {
     return undefined
   }
 }
+
+// 要不要往下問 Haiku：JEV 信心夠，或有糾正用語（JEV 沒裝或讀不到時只看關鍵字）
+export const passesFilter = (p: number | undefined, text: string): boolean =>
+  (p !== undefined && p >= JEV_THRESHOLD) || hasKeyword(text)
 
 // Haiku 的回覆：{"isHabit":bool,"entryId":string|null,"rule":string}；亂回就丟掉
 export type Verdict = { isHabit: boolean; entryId: string | null; rule: string }
