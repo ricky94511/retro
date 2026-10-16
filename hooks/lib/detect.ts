@@ -33,9 +33,12 @@ export const parseJevProbability = (stdout: string, name = 'q'): number | undefi
   }
 }
 
-// 要不要往下問 Haiku：JEV 信心夠，或有糾正用語（JEV 沒裝或讀不到時只看關鍵字）
+// 問 JEV 的是非題：舉例「我說過」「講過了」，口語的提醒也接得住
+export const JEV_QUESTION = '使用者這句話是不是在糾正 Claude 的做法，而且是要以後都照做的習慣或規則？像「我說過」「講過了」「每次都」「一律」這種提醒以前講過的要求，算是。只針對這一次內容的修改、單純提問、一般指令，不算。'
+
+// 要不要往下問 Haiku：有 JEV 就只看 JEV；JEV 沒裝或讀不到才用關鍵字
 export const passesFilter = (p: number | undefined, text: string): boolean =>
-  (p !== undefined && p >= JEV_THRESHOLD) || hasKeyword(text)
+  p === undefined ? hasKeyword(text) : p >= JEV_THRESHOLD
 
 // Haiku 的回覆：{"isHabit":bool,"entryId":string|null,"rule":string}；亂回就丟掉
 export type Verdict = { isHabit: boolean; entryId: string | null; rule: string }

@@ -4,7 +4,7 @@ import type { Band, Review, Suggestion } from '../types'
 
 import { countSkillUses, absolute, memoryPath } from './lib/context'
 import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
-import { isCandidate, passesFilter, parseJevProbability, parseVerdict, VERDICT_PROMPT } from './lib/detect'
+import { isCandidate, passesFilter, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_QUESTION } from './lib/detect'
 import { addCorrection, dueEntries, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
 import { PUSH_BATCH, SERVERS, fromNotion, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
 import { quote, redact, redactSettings } from './lib/redact'
@@ -118,14 +118,14 @@ const askJev = async ($: EngineInterface, text: string): Promise<number | undefi
     [
       'python3', jev, '--project', project, 'ask',
       '--state', JSON.stringify({ x: text }),
-      '--q', JSON.stringify({ q: { type: 'noul', instructions: '這句話是不是對以後的習慣糾正（只改這一次內容的不算）？' } }),
+      '--q', JSON.stringify({ q: { type: 'noul', instructions: JEV_QUESTION } }),
     ],
     { timeoutMs: 60_000 },
   )
   return exitCode === 0 ? parseJevProbability(stdout) : undefined
 }
 
-// 偵測：JEV 有裝就每句先問；JEV 信心夠或有關鍵字，再問 Haiku 是不是習慣糾正
+// 偵測：JEV 有裝就每句先問；沒裝先過關鍵字；過了再問 Haiku 是不是習慣糾正
 const detect = async ($: EngineInterface, text: string) => {
   const p = await askJev($, text)
   if (!passesFilter(p, text)) return

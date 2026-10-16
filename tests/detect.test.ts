@@ -31,9 +31,9 @@ test('Haiku 回覆：取出 JSON，亂回就 null', () => {
   expect(parseVerdict('{"entryId": "e1"}')).toBe(null)
 })
 
-test('JEV 信心夠或有糾正用語就往下問', () => {
-  expect(passesFilter(0.77, '標題的命名規則要套用我設定的')).toBe(true)
-  expect(passesFilter(0.51, '回覆我也說過都是回中文 也講過了')).toBe(true)
-  expect(passesFilter(0.3, '幫我看這個檔案')).toBe(false)
+test('有 JEV 只看 JEV 的分數，沒有才看關鍵字', () => {
+  expect(passesFilter(0.87, '回覆我也說過都是回中文 也講過了')).toBe(true)
+  expect(passesFilter(0.3, '不要這樣')).toBe(false)
+  expect(passesFilter(undefined, '回覆我也說過都是回中文 也講過了')).toBe(true)
   expect(passesFilter(undefined, '幫我看這個檔案')).toBe(false)
 })
