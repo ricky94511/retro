@@ -97,10 +97,14 @@ const twice = JSON.stringify({
 })
 const third = '{"isHabit": true, "entryId": "e1", "rule": "標題用中文"}'
 
-test('沒有畫面（雲端）：累積到 3 次的通知，下一次送訊息時請 Claude 加在回答最後，只加一次', async ($, on) => {
+test('沒有畫面（雲端）：回答結束後跳對話框；對話框打不開就在下一次回答最後加一行，只加一次', async ($, on) => {
   const w = setup(on, { ledger: twice, haikuReply: third })
+  on('turn.complete', () => ({ text: '好的' }))
   await submit($, '又用英文標題了')
   expect(w.toasts).toEqual([])
+  // 這一輪結束：測試環境沒有對話框，問不了
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '好的' } as never)
+  await new Promise(r => setTimeout(r, 50))
   await submit($, '幫我看這個 bug')
   expect(w.contexts.at(-1)).toContain('> 復盤：「標題用中文」已糾正 3 次，可以跑 /fupan')
   await submit($, '再看一個')

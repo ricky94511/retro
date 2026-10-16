@@ -8,7 +8,7 @@ import { isCandidate, hasKeyword, parseJevProbability, parseVerdict, VERDICT_PRO
 import { addCorrection, dueEntries, markApplied, markSkipped, parseLedger, type Due, type Ledger } from './lib/ledger'
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, latestUnreviewed, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
-import { enqueue, noticeContext, previousNotice, thresholdNotice, type Notice } from './lib/notice'
+import { DONE_OPTIONS, dialogFor, enqueue, noticeContext, previousNotice, reactionFor, thresholdNotice, type Notice } from './lib/notice'
 import { buildPrompt, parseSuggestions, type Context } from './lib/suggest'
 import { formatReview, parseFupanArgs, HELP, firstChoices, afterPreviewChoices, questionHead, previewQuestion, PREVIEW, APPLY, SKIP } from './lib/format'
 
@@ -28,8 +28,10 @@ let turns = 0
 let corrections = 0
 let seq = 0
 let jevPath: string | null | undefined
-// 沒有畫面時排隊的通知，下一次送訊息時請 Claude 加在回答最後
+// 沒有畫面時排隊的提醒：回答結束後跳對話框問；對話框打不開的，下一次送訊息時請 Claude 加在回答最後
 let notices: Notice[] = []
+let answerNotices: Notice[] = []
+let isAsking = false
 
 const hasSurface = async ($: EngineInterface) => (await $.session.surfaces()).length > 0
 
@@ -338,6 +340,44 @@ const decideAll = async ($: EngineInterface, r: Review): Promise<string> => {
   return results.join('\n')
 }
 
+// 回答結束後，把排隊的提醒一則一則用對話框問；打不開的退回回答最後的通知
+const askQueued = async ($: EngineInterface) => {
+  if (isAsking) return
+  isAsking = true
+  try {
+    while (notices.length > 0) {
+      const n = notices[0]!
+      notices = notices.slice(1)
+      const { question, options } = dialogFor(n)
+      let answer: string
+      try {
+        answer = await $.ui.ask(question, { header: '復盤', options })
+      } catch {
+        answerNotices = enqueue(answerNotices, n)
+        continue
+      }
+      if (n.kind === 'previous') await withSnapshotStatus($, n.snapshotId, 'asked')
+      await react($, n, answer)
+    }
+  } finally {
+    isAsking = false
+  }
+}
+
+const react = async ($: EngineInterface, n: Notice, answer: string) => {
+  const reaction = reactionFor(n, answer)
+  if (reaction === 'later') return
+  if (n.kind === 'previous' && reaction === 'dismiss-previous') {
+    await withSnapshotStatus($, n.snapshotId, 'dismissed')
+    return
+  }
+  const source = n.kind === 'previous' ? await loadSnapshot($, n.snapshotId) : 'fork'
+  if (!source) return
+  const r = await runReview($, source)
+  const summary = r.suggestions.length === 0 ? formatReview(r) : await decideAll($, r)
+  await $.ui.ask(`復盤完成：\n${summary}`, { header: '復盤', options: DONE_OPTIONS }).catch(() => undefined)
+}
+
 const askAbout = async ($: EngineInterface, snap: Pick<Snapshot, 'sessionId' | 'turns' | 'corrections'>) => {
   if (await hasSurface($)) {
     await update($, band, () => ({ snapshotId: snap.sessionId, turns: snap.turns, corrections: snap.corrections }))
@@ -390,12 +430,12 @@ export const register: Register = on => {
     // 在背景跑，不拖慢送出
     void detect($, e.text).catch(() => undefined)
     // 排隊的通知交給這一輪的回答；上一個對話的通知送出後標成已問過
-    const ctx = noticeContext(notices)
+    const ctx = noticeContext(answerNotices)
     if (!ctx) return next(e)
-    const sent = notices
-    notices = []
+    const sent = answerNotices
+    answerNotices = []
     for (const n of sent) {
-      if (n.key.startsWith('snap:')) await withSnapshotStatus($, n.key.slice(5), 'asked')
+      if (n.kind === 'previous') await withSnapshotStatus($, n.snapshotId, 'asked')
     }
     return next({ ...e, context: [...(e.context ?? []), ctx] })
   })
@@ -404,6 +444,8 @@ export const register: Register = on => {
     const done = await next(e)
     if (done.text) transcript.push(`Claude：${done.text}`)
     await saveSnapshot($)
+    // 回答結束後跳對話框（不等它，讓這一輪先結束）
+    void askQueued($)
     return done
   })
 
