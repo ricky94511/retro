@@ -211,7 +211,9 @@ const runFupan = async ($: Engine, args: string) =>
 test('/fupan notion <網址>：拉下 Notion 的事件合併、推上本機還沒推的事件', async ($, on) => {
   const w = setup(on, { ledger: JSON.stringify({ events: [correction('ev_local', '本機那句')], unsynced: ['ev_local'] }) })
   const created = notionWorld(on)
-  expect(await runFupan($, `notion ${DB}`)).toContain('已同步：Notion 上有 1 個事件，推上 1 個新事件。\n（fupan ')
+  expect(await runFupan($, `notion ${DB}`)).toContain(
+    '已同步：Notion 上有 1 個事件，推上 1 個新事件。\n帳本：2 個事件（糾正 2、套用 0、略過 0），歸成 1 條規則（已套用 0、累積中 1、已略過 0）。\n（fupan ',
+  )
   expect(created.map(p => p['事件ID'])).toEqual(['ev_local'])
   const ledger = JSON.parse(w.writes['/home/u/.claude/retro/ledger.json']!)
   expect(ledger.events.map((e: { id: string }) => e.id).sort()).toEqual(['ev_local', 'ev_remote'])

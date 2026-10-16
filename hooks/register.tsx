@@ -5,7 +5,7 @@ import type { Band, Review, Suggestion } from '../types'
 import { countSkillUses, absolute, memoryPath } from './lib/context'
 import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
 import { isCandidate, passesFilter, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_QUESTION } from './lib/detect'
-import { addCorrection, dueEntries, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
+import { addCorrection, dueEntries, ledgerSummary, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
 import { restorable, restoreSummary, restoreText, type RestoreReport } from './lib/restore'
 import { PUSH_BATCH, SERVERS, fromNotion, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
 import { quote, redact, redactSettings } from './lib/redact'
@@ -410,7 +410,7 @@ const push = ($: EngineInterface) =>
     return cfg ? pushNow($, cfg) : 0
   }).catch(() => 0)
 
-type SyncResult = { status: 'off' } | { status: 'failed' } | { status: 'ok'; pulled: number; pushed: number }
+type SyncResult = { status: 'off' } | { status: 'failed' } | { status: 'ok'; pulled: number; pushed: number; summary: string }
 
 const sync = ($: EngineInterface, given?: string): Promise<SyncResult> =>
   queueSync(async (): Promise<SyncResult> => {
@@ -418,7 +418,8 @@ const sync = ($: EngineInterface, given?: string): Promise<SyncResult> =>
     if (!cfg) return given ? { status: 'failed' } : { status: 'off' }
     const pulled = await pull($, cfg)
     if (pulled === null) return { status: 'failed' }
-    return { status: 'ok', pulled, pushed: await pushNow($, cfg) }
+    const pushed = await pushNow($, cfg)
+    return { status: 'ok', pulled, pushed, summary: ledgerSummary(await loadLedger($)) }
   }).catch((): SyncResult => ({ status: 'failed' }))
 
 const syncText = (r: SyncResult): string =>
@@ -426,7 +427,7 @@ const syncText = (r: SyncResult): string =>
     ? '還沒設定 Notion。用 /fupan notion <復盤帳本資料庫的網址> 設定，或設環境變數 FUPAN_NOTION_DB。'
     : r.status === 'failed'
       ? '連不上 Notion 的「復盤帳本」：確認 Notion 連接器有連上、網址正確。事件先存在本機，下次再補推。'
-      : `已同步：Notion 上有 ${r.pulled} 個事件，推上 ${r.pushed} 個新事件。`
+      : `已同步：Notion 上有 ${r.pulled} 個事件，推上 ${r.pushed} 個新事件。\n${r.summary}`
 
 // ── 恢復 ──
 // 雲端容器每次都是新的：開對話時同步完 Notion，把已套用的規則補回 ~/.claude/CLAUDE.md。

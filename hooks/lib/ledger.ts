@@ -161,3 +161,15 @@ export const parseLedger = (text: string | undefined): Ledger => {
     return emptyLedger()
   }
 }
+
+// 同步回報用：事件是「發生過的事」，規則是由事件算出來的。分開列，避免把事件數當成規則數
+export const ledgerSummary = (ledger: Ledger): string => {
+  const kinds = { correct: 0, apply: 0, skip: 0 }
+  for (const e of ledger.events) kinds[e.kind] += 1
+  const status = { accumulating: 0, applied: 0, skipped: 0 }
+  for (const e of ledger.entries) status[e.status.kind] += 1
+  return (
+    `帳本：${ledger.events.length} 個事件（糾正 ${kinds.correct}、套用 ${kinds.apply}、略過 ${kinds.skip}），` +
+    `歸成 ${ledger.entries.length} 條規則（已套用 ${status.applied}、累積中 ${status.accumulating}、已略過 ${status.skipped}）。`
+  )
+}

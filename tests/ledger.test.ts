@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  addCorrection, dueEntries, emptyLedger, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Ledger,
+  addCorrection, dueEntries, emptyLedger, ledgerSummary, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Ledger,
 } from '../hooks/lib/ledger'
 
 let n = 0
@@ -94,4 +94,15 @@ test('壞掉的帳本檔當空的；讀檔時規則由事件重算', () => {
   const l = fix(emptyLedger(), '規則', 'a').ledger
   const again = parseLedger(JSON.stringify({ ...l, entries: [] }))
   expect(again.entries[0]!.count).toBe(1)
+})
+
+test('同步回報：事件與規則分開數（3 次糾正 + 2 次套用 = 2 條規則都已套用）', () => {
+  let l = fix(emptyLedger(), '中文', 'a').ledger
+  const zh = l.entries[0]!.id
+  l = fix(l, '', 'b', zh).ledger
+  l = fix(l, '篩選', 'c').ledger
+  const filter = l.entries.find(e => e.id !== zh)!.id
+  l = markApplied(l, zh, '~/.claude/CLAUDE.md', at())
+  l = markApplied(l, filter, '~/.claude/CLAUDE.md', at())
+  expect(ledgerSummary(l)).toBe('帳本：5 個事件（糾正 3、套用 2、略過 0），歸成 2 條規則（已套用 2、累積中 0、已略過 0）。')
 })
