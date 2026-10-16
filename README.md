@@ -55,7 +55,8 @@
 - **資料庫**：一列一個事件（糾正、套用、略過），欄位是 摘要、事件ID、類型、規則ID、規則、原話、專案、對話、來源（本機／雲端）、檔案、次數、時間。請不要改欄位名稱。
 - **設定**（擇一）：
   - 在 Claude Code 裡執行 `/fupan notion <資料庫網址>`，會存到 `~/.claude/retro/notion.json`，同一台電腦之後都會用。
-  - 設環境變數 `FUPAN_NOTION_DB=<資料庫網址>`。雲端 session 每次都是新的容器，請把它加在雲端環境的環境變數裡（session 標題列的雲端環境選單 → Edit → 環境變數），新開的 session 才會讀到。
+  - 雲端 session 每次都是新的容器：在 Setup script 寫入 `~/.claude/retro/notion.json`（見上方「安裝」的雲端段落）。
+  - 也可以設環境變數 `FUPAN_NOTION_DB=<資料庫網址>`（要讓 Claude Code 讀得到，例如寫進 `~/.claude/settings.json` 的 `env`）。
 - **什麼時候同步**：開對話時、以及每次復盤前，拉一次 Notion 的事件合併進來；每記一個新事件就在背景推上去。推不上去（沒連 Notion、離線）就先存在本機，下次再補推。`/fupan 同步` 可以立刻同步一次並看結果。
 - **怎麼合併**：帳本只記事件，每個事件有自己的 ID；合併時依 ID 去重，再重算每條規則的次數與狀態，所以同一件事不會被算兩次。
 - **限制**：兩個地方可能同時把同一種糾正記成兩條不同的規則（還沒同步到對方時）。復盤時模型會看到兩條，可以建議合併，但不會自動合併。
@@ -79,7 +80,35 @@ claude
 
 或在 Claude Code 裡 `/plugin marketplace add ricky94511/retro` 再 `/plugin install fupan@retro`。
 
-**雲端（claude.ai/code）**：在環境的 Setup script 裡 clone 這個 repo，並讓 session 載入它（參考上面的 `CLAUDE_CODE_PLUGIN_DIRS`）。雲端 session 的檔案在容器裡，容器結束就沒了，帳本也一樣。
+**雲端（claude.ai/code）**：在雲端環境的 Setup script **最後面**加上這段（若前面已有設定 `CLAUDE_CODE_PLUGIN_DIRS` 的段落，要放在它之後）。Setup script 裡 export 的變數傳不到 Claude Code，所以寫進 `~/.claude/settings.json`；外掛放在 `/home/user/plugins/retro`，避免更新時蓋掉你正在開發的 repo：
+
+```bash
+if [ -d /home/user/plugins/retro/.git ]; then
+  git -C /home/user/plugins/retro fetch -q --depth 1 origin main && git -C /home/user/plugins/retro reset -q --hard origin/main
+else
+  git clone -q --depth 1 https://github.com/ricky94511/retro /home/user/plugins/retro
+fi
+
+python3 - <<'EOF'
+import json, pathlib
+home = pathlib.Path.home()
+p = home / ".claude/settings.json"
+d = json.loads(p.read_text()) if p.exists() else {}
+env = d.setdefault("env", {})
+dirs = [x for x in env.get("CLAUDE_CODE_PLUGIN_DIRS", "").split(":") if x]
+if "/home/user/plugins/retro" not in dirs:
+    dirs.append("/home/user/plugins/retro")
+env["CLAUDE_CODE_PLUGIN_DIRS"] = ":".join(dirs)
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(d, indent=2))
+# 要同步到 Notion 才需要：換成你的「復盤帳本」資料庫網址
+n = home / ".claude/retro/notion.json"
+n.parent.mkdir(parents=True, exist_ok=True)
+n.write_text(json.dumps({"database": "<復盤帳本資料庫的網址>"}))
+EOF
+```
+
+雲端 session 的容器結束後，`~/.claude/retro/` 裡的帳本與快照也會消失；要跨 session 累積，請設定 Notion 同步。
 
 **Cowork 上傳**：在 Mac 上執行 `bash scripts/pack.sh`，會產生 `~/Downloads/fupan.zip`（不含金鑰），再到 Cowork 上傳。
 
