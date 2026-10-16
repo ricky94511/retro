@@ -7,7 +7,8 @@ import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupNam
 import { isCandidate, hasKeyword, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_THRESHOLD } from './lib/detect'
 import { addCorrection, dueEntries, markApplied, markSkipped, parseLedger, type Due, type Ledger } from './lib/ledger'
 import { quote, redact, redactSettings } from './lib/redact'
-import { clipTranscript, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
+import { clipTranscript, latestUnreviewed, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
+import { enqueue, noticeContext, previousNotice, thresholdNotice, type Notice } from './lib/notice'
 import { buildPrompt, parseSuggestions, type Context } from './lib/suggest'
 import { formatReview, parseFupanArgs, HELP, firstChoices, afterPreviewChoices, questionHead, previewQuestion, PREVIEW, APPLY, SKIP } from './lib/format'
 
@@ -27,6 +28,16 @@ let turns = 0
 let corrections = 0
 let seq = 0
 let jevPath: string | null | undefined
+// 沒有畫面時排隊的通知，下一次送訊息時請 Claude 加在回答最後
+let notices: Notice[] = []
+
+const hasSurface = async ($: EngineInterface) => (await $.session.surfaces()).length > 0
+
+// 有畫面就 toast；沒有（雲端 session）就排進回答最後的通知
+const notify = async ($: EngineInterface, n: Notice) => {
+  if (await hasSurface($)) $.ui.toast(n.line)
+  else notices = enqueue(notices, n)
+}
 
 function newId() {
   return `snap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -125,7 +136,10 @@ const detect = async ($: EngineInterface, text: string) => {
   )
   await saveLedger($, next)
   corrections += 1
-  if (crossed) $.ui.toast(`復盤：「${rule}」已糾正 3 次，可以跑 /fupan`)
+  if (crossed) {
+    const entry = next.entries.find(e => e.count === 3 && (known ? e.id === verdict.entryId : e.rule === rule))
+    await notify($, thresholdNotice(entry?.id ?? rule, entry?.rule ?? rule))
+  }
 }
 
 // 每輪結束存一份；保留已復盤、已略過的狀態
@@ -324,6 +338,24 @@ const decideAll = async ($: EngineInterface, r: Review): Promise<string> => {
   return results.join('\n')
 }
 
+const askAbout = async ($: EngineInterface, snap: Pick<Snapshot, 'sessionId' | 'turns' | 'corrections'>) => {
+  if (await hasSurface($)) {
+    await update($, band, () => ({ snapshotId: snap.sessionId, turns: snap.turns, corrections: snap.corrections }))
+  } else {
+    notices = enqueue(notices, previousNotice(snap.sessionId, snap.turns, snap.corrections))
+  }
+}
+
+const loadSnapshots = async ($: EngineInterface): Promise<Snapshot[]> => {
+  const files = await $.fs.list(`${await retroDir($)}/sessions`).catch(() => [])
+  const snaps: Snapshot[] = []
+  for (const f of files) {
+    const snap = await loadSnapshot($, f.name.replace(/\.json$/, ''))
+    if (snap) snaps.push(snap)
+  }
+  return snaps
+}
+
 const dismissBand = async ($: EngineInterface, b: Band) => {
   await withSnapshotStatus($, b.snapshotId, 'dismissed')
   await update($, band, () => null)
@@ -346,26 +378,26 @@ export const register: Register = on => {
     await $.command.register({ name: 'fupan', description: '復盤這段對話：找出糾正，提議 CLAUDE.md／skill／設定的修改' })
 
     // 上一個沒復盤的對話：問一次
-    const dir = `${await retroDir($)}/sessions`
-    const files = await $.fs.list(dir).catch(() => [])
-    const snaps: Snapshot[] = []
-    for (const f of files) {
-      const snap = await loadSnapshot($, f.name.replace(/\.json$/, ''))
-      if (snap) snaps.push(snap)
-    }
-    const old = pendingAsk(snaps, snapshotId)
-    if (old) await update($, band, () => ({ snapshotId: old.sessionId, turns: old.turns, corrections: old.corrections }))
+    const old = pendingAsk(await loadSnapshots($), snapshotId)
+    if (old) await askAbout($, old)
     return next(e)
   })
 
-  on('prompt.submit', ($, e, next) => {
+  on('prompt.submit', async ($, e, next) => {
     turns += 1
     transcript.push(`用戶：${e.text}`)
-    if (isCandidate(e.text, e.origin)) {
-      // 在背景跑，不拖慢送出
-      void detect($, e.text).catch(() => undefined)
+    if (!isCandidate(e.text, e.origin)) return next(e)
+    // 在背景跑，不拖慢送出
+    void detect($, e.text).catch(() => undefined)
+    // 排隊的通知交給這一輪的回答；上一個對話的通知送出後標成已問過
+    const ctx = noticeContext(notices)
+    if (!ctx) return next(e)
+    const sent = notices
+    notices = []
+    for (const n of sent) {
+      if (n.key.startsWith('snap:')) await withSnapshotStatus($, n.key.slice(5), 'asked')
     }
-    return next(e)
+    return next({ ...e, context: [...(e.context ?? []), ctx] })
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -378,9 +410,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     resumeId = e.resume.id
     const snap = await saveSnapshot($)
-    if (shouldAsk(snap)) {
-      await update($, band, () => ({ snapshotId: snap.sessionId, turns: snap.turns, corrections: snap.corrections }))
-    }
+    if (shouldAsk(snap)) await askAbout($, snap)
     return next(e)
   })
 
@@ -395,12 +425,25 @@ export const register: Register = on => {
       const surfaces = await $.session.surfaces()
       return { text: `已發出 toast、ui.log、狀態列各一則（畫面：${surfaces.length ? surfaces.join('、') : '沒有'}）。看到哪幾則？` }
     }
+    if (args.action === 'previous' || args.action === 'dismiss') {
+      const old = latestUnreviewed(await loadSnapshots($), snapshotId)
+      if (!old) return { text: '沒有還沒復盤的上一個對話。' }
+      await update($, band, () => null)
+      if (args.action === 'dismiss') {
+        await withSnapshotStatus($, old.sessionId, 'dismissed')
+        return { text: '好，上一個對話不復盤了。' }
+      }
+      const r = await runReview($, old)
+      if (r.suggestions.length === 0) return { text: formatReview(r) }
+      return { text: await decideAll($, r) }
+    }
     if (args.action === 'run') {
       // $ 呼叫的時間不算進 hook 的預算，可以等復盤跑完再回覆（App 看不到面板，回覆一定看得到）
       const r = await runReview($, 'fork')
       if (r.suggestions.length === 0) return { text: formatReview(r) }
       return { text: await decideAll($, r) }
     }
+    if (!('n' in args)) return { text: HELP }
     const r = await read($, review)
     const s = r?.suggestions[args.n - 1]
     if (!r || !s) return { text: `沒有第 ${args.n} 條建議。先跑 /fupan。` }

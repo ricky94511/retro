@@ -7,10 +7,21 @@ declare const setTimeout: (fn: (v?: unknown) => void, ms: number) => unknown
 type Engine = Parameters<Extract<Parameters<typeof test>[1], (...a: never[]) => unknown>>[0]
 
 // 外掛底下的世界：沒裝 JEV、模型回覆、帳本檔案
-type World = { writes: Record<string, string>; haiku: string[]; haikuReply: string }
+type World = {
+  writes: Record<string, string>
+  haiku: string[]
+  haikuReply: string
+  ledger: string
+  surfaces: string[]
+  contexts: string[]
+  toasts: string[]
+}
 
 const setup = (on: On, over: Partial<World> = {}): World => {
-  const w: World = { writes: {}, haiku: [], haikuReply: '{"isHabit": true, "entryId": null, "rule": "不要用 rm -rf"}', ...over }
+  const w: World = {
+    writes: {}, haiku: [], haikuReply: '{"isHabit": true, "entryId": null, "rule": "不要用 rm -rf"}',
+    ledger: '', surfaces: [], contexts: [], toasts: [], ...over,
+  }
   const ok = (stdout: string) => ({
     value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   })
@@ -19,8 +30,17 @@ const setup = (on: On, over: Partial<World> = {}): World => {
     if (script === 'printf %s "$HOME"') return ok('/home/u')
     return ok('') // 找不到 jev.py
   })
-  on('prompt.submit', ($, e) => ({ text: e.text }))
-  on('fs.read', () => ({ value: '' })) // 檔案都不存在
+  on('prompt.submit', ($, e) => {
+    w.contexts.push((e.context ?? []).join('\n'))
+    return { text: e.text }
+  })
+  // 只有帳本可能有內容，其他檔案都不存在
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('ledger.json') ? (w.writes[e.path] ?? w.ledger) : '' }))
+  on('session.surfaces', () => ({ value: w.surfaces as never }))
+  on('ui.toast', ($, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('fs.list', () => ({ value: [] }))
   on('fs.write', ($, e) => {
     w.writes[e.path] = e.text
@@ -68,4 +88,29 @@ test('Haiku 說不是習慣糾正 → 不記', async ($, on) => {
   const w = setup(on, { haikuReply: '{"isHabit": false, "entryId": null, "rule": ""}' })
   await submit($, '不要這個檔案，只改這次')
   expect(Object.keys(w.writes).filter(p => p.endsWith('ledger.json'))).toEqual([])
+})
+
+// 帳本裡已有一條糾正 2 次的規則，這句是第 3 次
+const twice = JSON.stringify({
+  entries: [{ id: 'e1', rule: '標題用中文', count: 2, quotes: ['a', 'b'], status: { kind: 'accumulating' } }],
+  events: [],
+})
+const third = '{"isHabit": true, "entryId": "e1", "rule": "標題用中文"}'
+
+test('沒有畫面（雲端）：累積到 3 次的通知，下一次送訊息時請 Claude 加在回答最後，只加一次', async ($, on) => {
+  const w = setup(on, { ledger: twice, haikuReply: third })
+  await submit($, '又用英文標題了')
+  expect(w.toasts).toEqual([])
+  await submit($, '幫我看這個 bug')
+  expect(w.contexts.at(-1)).toContain('> 復盤：「標題用中文」已糾正 3 次，可以跑 /fupan')
+  await submit($, '再看一個')
+  expect(w.contexts.at(-1)).not.toContain('已糾正 3 次')
+})
+
+test('有畫面（終端機）：累積到 3 次就跳 toast，不加在回答裡', async ($, on) => {
+  const w = setup(on, { ledger: twice, haikuReply: third, surfaces: ['terminal'] })
+  await submit($, '又用英文標題了')
+  expect(w.toasts).toEqual(['復盤：「標題用中文」已糾正 3 次，可以跑 /fupan'])
+  await submit($, '幫我看這個 bug')
+  expect(w.contexts.at(-1)).not.toContain('已糾正 3 次')
 })

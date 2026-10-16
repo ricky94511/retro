@@ -28,3 +28,9 @@ export const pendingAsk = (snaps: Snapshot[], sessionId?: string): Snapshot | un
 
 export const withStatus = (snaps: Snapshot[], id: string, status: Snapshot['status']): Snapshot[] =>
   snaps.map(s => (s.sessionId === id ? { ...s, status } : s))
+
+// /fupan 上一個：最近一個還沒復盤、也沒說不用的別的對話（問過但沒回應的也算）
+export const latestUnreviewed = (snaps: Snapshot[], sessionId?: string): Snapshot | undefined =>
+  snaps
+    .filter(s => (s.status === 'open' || s.status === 'asked') && s.sessionId !== sessionId)
+    .sort((a, b) => b.at - a.at)[0]
