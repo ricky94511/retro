@@ -6,6 +6,7 @@ import { countSkillUses, absolute, memoryPath } from './lib/context'
 import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
 import { isCandidate, passesFilter, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_QUESTION } from './lib/detect'
 import { addCorrection, dueEntries, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
+import { restorable, restoreText } from './lib/restore'
 import { PUSH_BATCH, SERVERS, fromNotion, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, latestUnreviewed, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
@@ -427,9 +428,28 @@ const syncText = (r: SyncResult): string =>
       ? '連不上 Notion 的「復盤帳本」：確認 Notion 連接器有連上、網址正確。事件先存在本機，下次再補推。'
       : `已同步：Notion 上有 ${r.pulled} 個事件，推上 ${r.pushed} 個新事件。`
 
+// ── 恢復 ──
+// 雲端容器每次都是新的：開對話時同步完 Notion，把已套用的規則補回 ~/.claude/CLAUDE.md。
+// 本機的檔案本來就在，而且你可能手動改過，不補。
+let restoring: Promise<string | null> = Promise.resolve(null)
+
+const restore = async ($: EngineInterface): Promise<string | null> => {
+  if ((await sourceOf($)) !== '雲端') return null
+  const h = await homeDir($)
+  const path = `${h}/.claude/CLAUDE.md`
+  const next = restoreText(await readText($, path), restorable(await loadLedger($), h))
+  if (next === null) return null
+  await $.fs.write(path, next)
+  // 引擎可能已經讀過 CLAUDE.md：請它重問 prompt.context，下一輪就帶上補回的內容
+  $.ui.invalidate('prompt.context')
+  return next
+}
+
 // 套用／略過後回寫帳本；套用的條目記下寫在哪個檔案
 const finish = async ($: EngineInterface, s: Suggestion, how: 'applied' | 'skipped', file?: string) => {
-  const m = { sessionId: snapshotId, project, source: await sourceOf($) }
+  // 套用記下寫進去的文字：雲端換了容器時，靠它把規則補回 CLAUDE.md
+  const text = 'newText' in s.change ? s.change.newText.trim() : ''
+  const m = { sessionId: snapshotId, project, source: await sourceOf($), text }
   await updateLedger($, l => (how === 'applied' ? markApplied(l, s.evidence.entryId, file ?? '', m) : markSkipped(l, s.evidence.entryId, m)))
   await markDone($, s, how)
   void push($)
@@ -557,13 +577,26 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     project = e.cwd
     await syncSession($)
-    void sync($)
+    restoring = sync($).then(() => restore($)).catch(() => null)
     await $.command.register({ name: 'fupan', description: '復盤這段對話：找出糾正，提議 CLAUDE.md／skill／設定的修改' })
 
     // 上一個沒復盤的對話：問一次
     const old = pendingAsk(await loadSnapshots($), snapshotId)
     if (old) await askAbout($, old)
     return next(e)
+  })
+
+  // 第一則訊息帶的 CLAUDE.md：等補回完成（最多 15 秒），內容跟檔案不一樣就換成檔案的
+  on('prompt.context', async ($, e, next) => {
+    const r = await next(e)
+    if ((await sourceOf($)) !== '雲端') return r
+    await Promise.race([restoring, $.clock.sleep(15_000)])
+    const files = r.instructionFiles ?? e.instructionFiles
+    if (!files) return r // 上游改寫過 claudeMd，背後的檔案不明，不動
+    const path = `${await homeDir($)}/.claude/CLAUDE.md`
+    const content = await readText($, path)
+    if (!content || files.find(f => f.path === path)?.content === content) return r
+    return { ...r, instructionFiles: [{ path, kind: 'user', content }, ...files.filter(f => f.path !== path)] }
   })
 
   on('prompt.submit', async ($, e, next) => {

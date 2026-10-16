@@ -16,12 +16,13 @@ type World = {
   sessionId: string
   contexts: string[]
   toasts: string[]
+  isCloud: boolean
 }
 
 const setup = (on: On, over: Partial<World> = {}): World => {
   const w: World = {
     writes: {}, haiku: [], haikuReply: '{"isHabit": true, "entryId": null, "rule": "不要用 rm -rf"}',
-    ledger: '', surfaces: [], sessionId: 's1', contexts: [], toasts: [], ...over,
+    ledger: '', surfaces: [], sessionId: 's1', contexts: [], toasts: [], isCloud: false, ...over,
   }
   const ok = (stdout: string) => ({
     value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
@@ -29,6 +30,7 @@ const setup = (on: On, over: Partial<World> = {}): World => {
   on('process.run', ($, e) => {
     const script = e.argv[2] ?? ''
     if (script === 'printf %s "$HOME"') return ok('/home/u')
+    if (script.includes('CLAUDE_CODE_REMOTE_SDK_URL')) return ok(w.isCloud ? 'https://remote' : '')
     return ok('') // 找不到 jev.py
   })
   on('prompt.submit', ($, e) => {
@@ -155,6 +157,28 @@ test('真的換了對話：上一個沒復盤、有糾正的對話要問', async
   w.writes[`${SESSIONS}/s1.json`] = snapshot('s1')
   await startAndFinishTurn($, on)
   expect(w.contexts.at(-1)).toContain('上一個對話（1 輪，糾正 1 次）')
+})
+
+// ── 恢復：雲端的新容器把已套用的規則補回 ~/.claude/CLAUDE.md ──
+const applied = JSON.stringify({
+  events: [
+    correction('ev1', 'a'),
+    { ...correction('ap1', ''), kind: 'apply', file: '~/.claude/CLAUDE.md', quote: '- 標題一律用中文' },
+  ],
+  unsynced: [],
+})
+const USER_MD = '/home/u/.claude/CLAUDE.md'
+
+test('雲端：開對話時把已套用的規則補回 CLAUDE.md', async ($, on) => {
+  const w = setup(on, { ledger: applied, isCloud: true })
+  await startAndFinishTurn($, on)
+  expect(w.writes[USER_MD]).toBe('- 標題一律用中文\n')
+})
+
+test('本機：CLAUDE.md 本來就在、可能手動改過，不補', async ($, on) => {
+  const w = setup(on, { ledger: applied })
+  await startAndFinishTurn($, on)
+  expect(w.writes[USER_MD]).toBeUndefined()
 })
 
 // ── Notion 同步 ──

@@ -50,7 +50,7 @@ test('寫成規則後又被糾正 2 次 → 改寫原規則，不另加一條', 
   let l = emptyLedger()
   for (const q of ['a', 'b', 'c']) l = fix(l, '規則', q, l.entries[0]?.id).ledger
   l = markApplied(l, l.entries[0]!.id, '/p/CLAUDE.md', at())
-  expect(l.entries[0]!.status).toEqual({ kind: 'applied', file: '/p/CLAUDE.md', atCount: 3, quote: 'c' })
+  expect(l.entries[0]!.status).toEqual({ kind: 'applied', file: '/p/CLAUDE.md', atCount: 3, quote: 'c', text: '' })
   expect(dueEntries(l).length).toBe(0)
   l = fix(l, '', 'd', l.entries[0]?.id).ledger
   expect(dueEntries(l).length).toBe(0)

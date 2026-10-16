@@ -4,7 +4,7 @@
 export type Status =
   | { kind: 'accumulating' }
   | { kind: 'skipped'; atCount: number }
-  | { kind: 'applied'; file: string; atCount: number; quote: string | null }
+  | { kind: 'applied'; file: string; atCount: number; quote: string | null; text: string } // text：寫進檔案的文字（舊事件沒有）
 
 export type Entry = {
   id: string
@@ -25,7 +25,7 @@ export type Event = {
   rule: string
   sessionId: string
   project: string
-  quote: string // 糾正的原話；套用、略過時空白
+  quote: string // 糾正的原話；套用時是寫進檔案的文字；略過時空白
   file: string // 套用寫在哪個檔案；其他空白
   source: Source
 }
@@ -48,7 +48,7 @@ export const rebuild = (events: Event[]): Entry[] => {
       entry.count += 1
       entry.quotes = [...entry.quotes, ev.quote].slice(-QUOTES_KEPT)
     } else if (ev.kind === 'apply') {
-      entry.status = { kind: 'applied', file: ev.file, atCount: entry.count, quote: entry.quotes.at(-1) ?? null }
+      entry.status = { kind: 'applied', file: ev.file, atCount: entry.count, quote: entry.quotes.at(-1) ?? null, text: ev.quote }
     } else {
       entry.status = { kind: 'skipped', atCount: entry.count }
     }
@@ -96,7 +96,7 @@ export const addCorrection = (ledger: Ledger, c: Correction, newId: () => string
   return { ledger: next, crossed }
 }
 
-type Mark = { at?: number; eventId?: string; sessionId?: string; project?: string; source?: Source }
+type Mark = { at?: number; eventId?: string; sessionId?: string; project?: string; source?: Source; text?: string }
 
 const mark = (ledger: Ledger, id: string, kind: 'apply' | 'skip', file: string, m: Mark): Ledger => {
   const entry = ledger.entries.find(e => e.id === id)
@@ -109,7 +109,7 @@ const mark = (ledger: Ledger, id: string, kind: 'apply' | 'skip', file: string, 
     rule: entry.rule,
     sessionId: m.sessionId ?? '',
     project: m.project ?? '',
-    quote: '',
+    quote: kind === 'apply' ? m.text ?? '' : '',
     file,
     source: m.source ?? '本機',
   })
