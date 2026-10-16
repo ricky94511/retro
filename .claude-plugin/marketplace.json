@@ -1,0 +1,12 @@
+{
+  "name": "retro",
+  "owner": { "name": "ricky94511" },
+  "plugins": [
+    {
+      "name": "fupan",
+      "source": "./",
+      "description": "復盤：偵測糾正、累積帳本、提議 CLAUDE.md／skill／設定的修改"
+    }
+  ],
+  "description": "復盤 Claude Code 行為的外掛"
+}
