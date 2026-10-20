@@ -5,6 +5,11 @@ import type { Event, EventKind, Source } from './ledger'
 // 本機的連接器叫「claude.ai Notion」，雲端 session 叫「Notion」：依序試
 export const SERVERS = ['Notion', 'claude.ai Notion']
 
+// 桌面 app 的連接器名稱是一串 ID：先用目前連上、有 notion-fetch 這支工具的伺服器，再試已知名稱
+export const notionServers = (tools: readonly { name: string; serverName: string }[]): string[] => [
+  ...new Set([...tools.filter(t => t.name.endsWith('__notion-fetch')).map(t => t.serverName), ...SERVERS]),
+]
+
 export type NotionConfig = {
   database: string // 資料庫網址
   dataSourceId: string // 寫入用

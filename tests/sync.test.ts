@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { fromNotion, parseDatabase, parsePage, plain, resultJson, toNotion } from '../hooks/lib/sync'
+import { fromNotion, notionServers, parseDatabase, parsePage, plain, resultJson, toNotion } from '../hooks/lib/sync'
 import type { Event } from '../hooks/lib/ledger'
 import { restoreSummary } from '../hooks/lib/restore'
 
@@ -67,4 +67,15 @@ test('同步狀況回報：版本、雲端或本機、CLAUDE.md 規則補了幾�
     .toBe('（fupan abc1234・雲端・套用到 ~/.claude/CLAUDE.md 的規則 2 條：本來就在 1 條，這次補回 1 條）')
   expect(restoreSummary({ version: '', isCloud: false, total: 2, present: 0, added: 0 })).toBe('（fupan 未知版本・本機・本機不補回 CLAUDE.md）')
   expect(restoreSummary({ version: 'x', isCloud: true, total: 0, present: 0, added: 0 })).toContain('沒有套用到')
+})
+
+test('找 Notion 連接器：有 notion-fetch 的伺服器排前面（桌面 app 是一串 ID），再試已知名稱', () => {
+  const tools = [
+    { name: 'mcp__0ecba4d4__notion-fetch', serverName: '0ecba4d4' },
+    { name: 'mcp__0ecba4d4__notion-search', serverName: '0ecba4d4' },
+    { name: 'mcp__Gmail__send', serverName: 'Gmail' },
+    { name: 'mcp__Notion__notion-fetch', serverName: 'Notion' },
+  ]
+  expect(notionServers(tools)).toEqual(['0ecba4d4', 'Notion', 'claude.ai Notion'])
+  expect(notionServers([])).toEqual(['Notion', 'claude.ai Notion'])
 })

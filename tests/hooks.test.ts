@@ -230,6 +230,22 @@ test('連不上 Notion：事件留在本機，回覆說明', async ($, on) => {
   expect(w.writes['/home/u/.claude/retro/ledger.json']).toBe(undefined) // 帳本沒動
 })
 
+test('連接器名稱是一串 ID：從目前的工具找到它；連不上時回報真正的原因', async ($, on) => {
+  const w = setup(on)
+  on('session.usage', () => ({
+    value: { context: { breakdown: { mcpTools: [{ name: 'mcp__0ecba4d4__notion-fetch', serverName: '0ecba4d4', tokens: 1 }] } } } as never,
+  }))
+  const tried: string[] = []
+  on('mcp.call', ($, e) => {
+    tried.push(e.server)
+    return { value: { content: [{ type: 'text', text: 'permission denied' }], isError: true } as never }
+  })
+  const text = await runFupan($, `notion ${DB}`)
+  expect(tried[0]).toBe('0ecba4d4')
+  expect(text).toContain('原因：notion-fetch 失敗（0ecba4d4：permission denied')
+  expect(w.writes['/home/u/.claude/retro/notion.json']).toBe(undefined)
+})
+
 test('沒設定 Notion：/fupan 同步 說怎麼設定', async ($, on) => {
   setup(on)
   notionWorld(on)

@@ -7,7 +7,7 @@ import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupNam
 import { isCandidate, passesFilter, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_QUESTION } from './lib/detect'
 import { addCorrection, dueEntries, ledgerSummary, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
 import { restorable, restoreSummary, restoreText, type RestoreReport } from './lib/restore'
-import { PUSH_BATCH, SERVERS, fromNotion, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
+import { PUSH_BATCH, fromNotion, notionServers, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, latestUnreviewed, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
 import { DONE_OPTIONS, dialogFor, enqueue, noticeContext, previousNotice, reactionFor, thresholdNotice, type Notice } from './lib/notice'
@@ -326,16 +326,32 @@ let syncQueue: Promise<unknown> = Promise.resolve()
 
 const notionPath = async ($: EngineInterface) => `${await retroDir($)}/notion.json`
 
+// 最近一次呼叫 Notion 失敗的原因，「連不上」時一起回報
+let notionError = ''
+
 const callNotion = async ($: EngineInterface, servers: readonly string[], tool: string, args: Record<string, unknown>) => {
+  const errors: string[] = []
   for (const server of servers) {
     try {
       const r = await $.mcp.call(server, tool, args)
-      if (!r.isError) return { server, content: r.content as { type: string; text?: string }[] }
-    } catch {
+      if (!r.isError) {
+        notionError = ''
+        return { server, content: r.content as { type: string; text?: string }[] }
+      }
+      const text = (r.content as { type: string; text?: string }[]).find(c => c.type === 'text')?.text ?? '回傳錯誤'
+      errors.push(`${server}：${text.slice(0, 200)}`)
+    } catch (e) {
       // 這個名稱沒連上，試下一個
+      errors.push(`${server}：${String(e instanceof Error ? e.message : e).slice(0, 200)}`)
     }
   }
+  notionError = `${tool} 失敗（${errors.join('；')}）`
   return null
+}
+
+const findNotionServers = async ($: EngineInterface) => {
+  const usage = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
+  return notionServers(usage?.context.breakdown?.mcpTools ?? [])
 }
 
 // 找出資料庫的 data source 與 view；結果存檔，下次不用再問
@@ -351,7 +367,7 @@ const loadNotion = async ($: EngineInterface, given?: string): Promise<Notion | 
   const database = given || (await sh($, 'printf %s "${FUPAN_NOTION_DB:-}"')) || saved.database
   if (!database) return (notion = null)
   if (saved.database === database && saved.dataSourceId && saved.viewUrl && saved.server) return (notion = saved as Notion)
-  const r = await callNotion($, SERVERS, 'notion-fetch', { id: database })
+  const r = await callNotion($, await findNotionServers($), 'notion-fetch', { id: database })
   const block = r?.content.find(c => c.type === 'text')?.text ?? ''
   const cfg = r ? parseDatabase(database, block) : null
   if (!r || !cfg) return (notion = null)
@@ -410,23 +426,23 @@ const push = ($: EngineInterface) =>
     return cfg ? pushNow($, cfg) : 0
   }).catch(() => 0)
 
-type SyncResult = { status: 'off' } | { status: 'failed' } | { status: 'ok'; pulled: number; pushed: number; summary: string }
+type SyncResult = { status: 'off' } | { status: 'failed'; error: string } | { status: 'ok'; pulled: number; pushed: number; summary: string }
 
 const sync = ($: EngineInterface, given?: string): Promise<SyncResult> =>
   queueSync(async (): Promise<SyncResult> => {
     const cfg = await loadNotion($, given)
-    if (!cfg) return given ? { status: 'failed' } : { status: 'off' }
+    if (!cfg) return given ? { status: 'failed', error: notionError } : { status: 'off' }
     const pulled = await pull($, cfg)
-    if (pulled === null) return { status: 'failed' }
+    if (pulled === null) return { status: 'failed', error: notionError }
     const pushed = await pushNow($, cfg)
     return { status: 'ok', pulled, pushed, summary: ledgerSummary(await loadLedger($)) }
-  }).catch((): SyncResult => ({ status: 'failed' }))
+  }).catch((e): SyncResult => ({ status: 'failed', error: String(e instanceof Error ? e.message : e) }))
 
 const syncText = (r: SyncResult): string =>
   r.status === 'off'
     ? '還沒設定 Notion。用 /fupan notion <復盤帳本資料庫的網址> 設定，或設環境變數 FUPAN_NOTION_DB。'
     : r.status === 'failed'
-      ? '連不上 Notion 的「復盤帳本」：確認 Notion 連接器有連上、網址正確。事件先存在本機，下次再補推。'
+      ? `連不上 Notion 的「復盤帳本」：確認 Notion 連接器有連上、網址正確。事件先存在本機，下次再補推。${r.error ? `\n原因：${r.error}` : ''}`
       : `已同步：Notion 上有 ${r.pulled} 個事件，推上 ${r.pushed} 個新事件。\n${r.summary}`
 
 // ── 恢復 ──
