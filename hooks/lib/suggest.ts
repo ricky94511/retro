@@ -24,6 +24,13 @@ export const buildPrompt = (c: Context): string => {
    或 {"file":"要刪的 skill 資料夾裡的 SKILL.md"} （kind 為刪 skill）}
 改設定時 change 只寫 oldText／newText（JSON 片段），不要改金鑰。已有 skill 或規則能涵蓋的，改那個，不要重複加。
 
+## 結構優先
+文字規則被違反時不會報錯，所以每條先問：能不能讓這個錯做不出來或一做就被擋？依序選第一個做得到的：
+1. 改設定：在 settings.json 加 hook，例如 PreToolUse 擋下錯的工具呼叫並說明該怎麼做、UserPromptSubmit 每輪補提醒、Stop 檢查回答有沒有漏。hook 的 command 要一行寫完（shell 或 python3 -c），不能依賴另外的腳本檔，因為只能改設定檔。
+2. 改 skill／新 skill：做法或流程類的經驗。
+3. 加規則：要靠判斷、機械檢查不出來的，才寫進 CLAUDE.md。
+標「改寫原規則」的條目代表已經有規則卻還是一再被糾正，文字不夠用，優先考慮第 1 種。title 用一句話說明為什麼選這一層。
+
 ## 要處理的帳本條目
 ${due || '（無）'}
 

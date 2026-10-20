@@ -39,3 +39,14 @@ test('提示詞帶帳本原話、CLAUDE.md、設定（已遮蔽）', () => {
   expect(p).toContain('x：2 次')
   expect(p).toContain('"token": "***"')
 })
+
+test('提示詞要求結構優先：hook 先於 skill，規則最後', () => {
+  const p = buildPrompt({ due: [], claudeMd: [], memory: '', skills: [], settings: [] })
+  const hook = p.indexOf('1. 改設定')
+  const skill = p.indexOf('2. 改 skill')
+  const rule = p.indexOf('3. 加規則')
+  expect(hook).toBeGreaterThan(-1)
+  expect(hook).toBeLessThan(skill)
+  expect(skill).toBeLessThan(rule)
+  expect(p).toContain('不能依賴另外的腳本檔')
+})
