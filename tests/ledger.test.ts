@@ -106,3 +106,23 @@ test('同步回報：事件與規則分開數（3 次糾正 + 2 次套用 = 2 �
   l = markApplied(l, filter, '~/.claude/CLAUDE.md', at())
   expect(ledgerSummary(l)).toBe('帳本：5 個事件（糾正 3、套用 2、略過 0），歸成 2 條規則（已套用 2、累積中 0、已略過 0）。')
 })
+
+test('對話裡的糾正（帳本沒有條目）套用時補一條，事件會推上 Notion', () => {
+  let l = emptyLedger()
+  l = markApplied(l, '無帳本條目（對話糾正）', '~/.claude/CLAUDE.md', {
+    ...at(), text: '- 待辦做完要標完成', rule: '待辦做完同一輪標完成', quotes: ['那有把那則編著完成？'],
+  })
+  expect(l.entries.length).toBe(1)
+  const e = l.entries[0]!
+  expect(e.rule).toBe('待辦做完同一輪標完成')
+  expect(e.count).toBe(1)
+  expect(e.quotes).toEqual(['那有把那則編著完成？'])
+  expect(e.status).toEqual({ kind: 'applied', file: '~/.claude/CLAUDE.md', atCount: 1, quote: '那有把那則編著完成？', text: '- 待辦做完要標完成' })
+  expect(l.events.map(ev => ev.kind)).toEqual(['correct', 'apply'])
+  expect(l.unsynced).toEqual(l.events.map(ev => ev.id))
+})
+
+test('帳本沒有條目、也沒給規則：照舊不記', () => {
+  const l = markApplied(emptyLedger(), '不存在', '/p/CLAUDE.md', at())
+  expect(l.events.length).toBe(0)
+})

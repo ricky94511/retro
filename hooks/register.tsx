@@ -484,7 +484,8 @@ const restore = async ($: EngineInterface): Promise<RestoreReport> => {
 const finish = async ($: EngineInterface, s: Suggestion, how: 'applied' | 'skipped', file?: string) => {
   // 套用記下寫進去的文字：雲端換了容器時，靠它把規則補回 CLAUDE.md
   const text = 'newText' in s.change ? s.change.newText.trim() : ''
-  const m = { sessionId: snapshotId, project, source: await sourceOf($), text }
+  // 對話裡的糾正（帳本還沒有條目）：附上標題與原話，帳本會補一條
+  const m = { sessionId: snapshotId, project, source: await sourceOf($), text, rule: s.title, quotes: s.evidence.quotes }
   await updateLedger($, l => (how === 'applied' ? markApplied(l, s.evidence.entryId, file ?? '', m) : markSkipped(l, s.evidence.entryId, m)))
   await markDone($, s, how)
   void push($)

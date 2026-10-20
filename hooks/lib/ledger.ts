@@ -96,11 +96,43 @@ export const addCorrection = (ledger: Ledger, c: Correction, newId: () => string
   return { ledger: next, crossed }
 }
 
-type Mark = { at?: number; eventId?: string; sessionId?: string; project?: string; source?: Source; text?: string }
+// rule、quotes：建議來自對話裡的糾正、帳本還沒有條目時，用它們補一條，套用才記得到、推得上 Notion
+type Mark = { at?: number; eventId?: string; sessionId?: string; project?: string; source?: Source; text?: string; rule?: string; quotes?: string[] }
+
+// 帳本沒有這條：先用原話補糾正事件（沒原話就補一筆空的），新條目才有規則與次數
+const adopt = (ledger: Ledger, m: Mark): { ledger: Ledger; entryId: string } | null => {
+  const rule = m.rule?.trim()
+  if (!rule) return null
+  const entryId = eventId('r')
+  const at = m.at ?? Date.now()
+  const quotes = m.quotes?.length ? m.quotes : ['']
+  let next = ledger
+  quotes.forEach((quote, i) => {
+    next = withEvent(next, {
+      id: eventId('ev'),
+      at: at - quotes.length + i,
+      kind: 'correct',
+      entryId,
+      rule,
+      sessionId: m.sessionId ?? '',
+      project: m.project ?? '',
+      quote,
+      file: '',
+      source: m.source ?? '本機',
+    })
+  })
+  return { ledger: next, entryId }
+}
 
 const mark = (ledger: Ledger, id: string, kind: 'apply' | 'skip', file: string, m: Mark): Ledger => {
-  const entry = ledger.entries.find(e => e.id === id)
-  if (!entry) return ledger
+  let entry = ledger.entries.find(e => e.id === id)
+  if (!entry) {
+    const adopted = adopt(ledger, m)
+    if (!adopted) return ledger
+    ledger = adopted.ledger
+    id = adopted.entryId
+    entry = ledger.entries.find(e => e.id === id)!
+  }
   return withEvent(ledger, {
     id: m.eventId ?? eventId(kind === 'apply' ? 'ap' : 'sk'),
     at: m.at ?? Date.now(),
