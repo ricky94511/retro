@@ -6,7 +6,7 @@ import { countSkillUses, absolute, memoryPath } from './lib/context'
 import { isWritableMarkdown, isSettingsFile, applyChange, isValidJson, backupName, trashDir, diffLines } from './lib/apply'
 import { isCandidate, passesFilter, parseJevProbability, parseVerdict, VERDICT_PROMPT, JEV_QUESTION } from './lib/detect'
 import { addCorrection, dueEntries, ledgerSummary, markApplied, markSkipped, markSynced, mergeEvents, parseLedger, type Due, type Event, type Ledger, type Source } from './lib/ledger'
-import { restorable, restoreSummary, restoreText, type RestoreReport } from './lib/restore'
+import { hasRule, restorable, restoreSummary, restoreText, type RestoreReport } from './lib/restore'
 import { PUSH_BATCH, fromNotion, notionServers, parseDatabase, parsePage, resultJson, toNotion, type NotionConfig } from './lib/sync'
 import { quote, redact, redactSettings } from './lib/redact'
 import { clipTranscript, latestUnreviewed, pendingAsk, shouldAsk, type Snapshot } from './lib/snapshot'
@@ -446,22 +446,33 @@ const syncText = (r: SyncResult): string =>
       : `已同步：Notion 上有 ${r.pulled} 個事件，推上 ${r.pushed} 個新事件。\n${r.summary}`
 
 // ── 恢復 ──
-// 雲端容器每次都是新的：開對話時同步完 Notion，把已套用的規則補回 ~/.claude/CLAUDE.md。
-// 本機的檔案本來就在，而且你可能手動改過，不補。
+// 開對話時同步完 Notion，把已套用的規則補回 ~/.claude/CLAUDE.md：雲端的容器是新的，本機可能缺了在雲端套用的。
+// 只補缺的；本機寫之前先備份。
 let restoring: Promise<RestoreReport | null> = Promise.resolve(null)
 
+const pluginVersion = async ($: EngineInterface) => {
+  try {
+    const v = (JSON.parse((await readText($, `${$.plugin.root}/.claude-plugin/plugin.json`)) ?? '{}') as { version?: unknown }).version
+    return typeof v === 'string' ? `v${v}` : ''
+  } catch {
+    return ''
+  }
+}
+
 const restore = async ($: EngineInterface): Promise<RestoreReport> => {
-  const version = await sh($, `git -C "${$.plugin.root}" log -1 --format=%h 2>/dev/null`).catch(() => '')
+  // 用 /plugin install 裝的副本沒有 git 紀錄：退回 plugin.json 的版本號
+  const commit = await sh($, `git -C "${$.plugin.root}" log -1 --format=%h 2>/dev/null`).catch(() => '')
+  const version = commit || (await pluginVersion($))
   const isCloud = (await sourceOf($)) === '雲端'
   const h = await homeDir($)
   const rules = restorable(await loadLedger($), h)
   const report: RestoreReport = { version, isCloud, total: rules.length, present: 0, added: 0 }
-  if (!isCloud) return report
   const path = `${h}/.claude/CLAUDE.md`
   const current = await readText($, path)
-  report.present = rules.filter(r => current?.includes(r.text)).length
+  report.present = rules.filter(r => hasRule(current, r.text)).length
   const next = restoreText(current, rules)
   if (next === null) return report
+  if (!isCloud && current !== undefined) await $.fs.write(backupName(path, new Date()), current)
   await $.fs.write(path, next)
   report.added = rules.length - report.present
   // 引擎可能已經讀過 CLAUDE.md：請它重問 prompt.context，下一輪就帶上補回的內容
@@ -601,7 +612,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     project = e.cwd
     await syncSession($)
-    restoring = sync($).then(() => restore($)).catch(() => null)
+    // 熱重載會再跑一次 session.start：排在上一次後面，才不會兩次同時讀到舊檔、各補一次
+    restoring = restoring.then(() => sync($)).then(() => restore($)).catch(() => null)
     await $.command.register({ name: 'fupan', description: '復盤這段對話：找出糾正，提議 CLAUDE.md／skill／設定的修改' })
 
     // 上一個沒復盤的對話：問一次

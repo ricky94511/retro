@@ -1,6 +1,6 @@
 {
   "name": "fupan",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "復盤：把反覆糾正 Claude 的事變成 CLAUDE.md 規則、skill 或設定的修改；/fupan 或對話結束後提議，面板逐條預覽、套用",
   "author": { "name": "ricky94511" },
   "types": "./types/index.d.ts"

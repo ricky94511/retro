@@ -175,10 +175,21 @@ test('雲端：開對話時把已套用的規則補回 CLAUDE.md', async ($, on)
   expect(w.writes[USER_MD]).toBe('- 標題一律用中文\n')
 })
 
-test('本機：CLAUDE.md 本來就在、可能手動改過，不補', async ($, on) => {
+test('本機：缺的規則補在檔尾，寫之前先備份；已經有的（格式不同也算）不補', async ($, on) => {
   const w = setup(on, { ledger: applied })
+  w.writes[USER_MD] = '# 我的規則\n\n- 回覆用繁中\n'
   await startAndFinishTurn($, on)
-  expect(w.writes[USER_MD]).toBeUndefined()
+  expect(w.writes[USER_MD]).toBe('# 我的規則\n\n- 回覆用繁中\n- 標題一律用中文\n')
+  const backups = Object.keys(w.writes).filter(p => p.startsWith(`${USER_MD}.bak-`))
+  expect(backups.map(p => w.writes[p])).toEqual(['# 我的規則\n\n- 回覆用繁中\n'])
+})
+
+test('本機：規則已經在（手動改成沒有「- 」、加了句號），不寫檔也不備份', async ($, on) => {
+  const w = setup(on, { ledger: applied })
+  w.writes[USER_MD] = '標題一律用中文。\n'
+  await startAndFinishTurn($, on)
+  expect(w.writes[USER_MD]).toBe('標題一律用中文。\n')
+  expect(Object.keys(w.writes).some(p => p.includes('.bak-'))).toBe(false)
 })
 
 // ── Notion 同步 ──

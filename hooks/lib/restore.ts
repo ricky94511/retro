@@ -1,5 +1,5 @@
-// 恢復：雲端 session 每次都是新的容器，~/.claude/CLAUDE.md 是空的。
-// 開對話時，把帳本裡「已套用到 ~/.claude/CLAUDE.md」的規則補回去，規則跟著 Notion 走，不跟著容器走。
+// 恢復：開對話時，把帳本裡「已套用到 ~/.claude/CLAUDE.md」的規則補回去，規則跟著 Notion 走。
+// 雲端每次都是新的容器，檔案是空的；本機可能缺了在雲端套用的規則。兩邊都補，只補缺的。
 import type { Ledger } from './ledger'
 import { applyChange } from './apply'
 
@@ -16,11 +16,17 @@ export const restorable = (ledger: Ledger, home: string): Restorable[] =>
     return text ? [{ entryId: e.id, text }] : []
   })
 
+// 比對時不管開頭的「- 」、空白與句尾標點：手動改過格式的不重複補
+const normalize = (s: string) => s.replace(/^\s*[-*]\s*/gm, '').replace(/[\s。．.，,、；;：:！!]/g, '')
+
+export const hasRule = (current: string | undefined, text: string): boolean =>
+  !!current && normalize(current).includes(normalize(text))
+
 // 檔案裡還沒有的才補在檔尾；都有了回 null（不寫檔）
 export const restoreText = (current: string | undefined, rules: Restorable[]): string | null => {
   let text = current
   for (const r of rules) {
-    if (text?.includes(r.text)) continue
+    if (hasRule(text, r.text)) continue
     const next = applyChange(text, '', r.text)
     if (next.ok) text = next.text
   }
@@ -33,9 +39,7 @@ export type RestoreReport = { version: string; isCloud: boolean; total: number; 
 export const restoreSummary = (r: RestoreReport): string => {
   const where = r.isCloud ? '雲端' : '本機'
   const rules =
-    !r.isCloud
-      ? '本機不補回 CLAUDE.md'
-      : r.total === 0
+    r.total === 0
         ? '沒有套用到 ~/.claude/CLAUDE.md 的規則'
         : `套用到 ~/.claude/CLAUDE.md 的規則 ${r.total} 條：本來就在 ${r.present} 條，這次補回 ${r.added} 條`
   return `（fupan ${r.version || '未知版本'}・${where}・${rules}）`

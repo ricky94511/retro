@@ -65,7 +65,9 @@ test('從 Notion 讀回的套用事件：檔案路徑還原後才能補回 CLAUD
 test('同步狀況回報：版本、雲端或本機、CLAUDE.md 規則補了幾條', () => {
   expect(restoreSummary({ version: 'abc1234', isCloud: true, total: 2, present: 1, added: 1 }))
     .toBe('（fupan abc1234・雲端・套用到 ~/.claude/CLAUDE.md 的規則 2 條：本來就在 1 條，這次補回 1 條）')
-  expect(restoreSummary({ version: '', isCloud: false, total: 2, present: 0, added: 0 })).toBe('（fupan 未知版本・本機・本機不補回 CLAUDE.md）')
+  expect(restoreSummary({ version: 'v0.2.0', isCloud: false, total: 2, present: 2, added: 0 }))
+    .toBe('（fupan v0.2.0・本機・套用到 ~/.claude/CLAUDE.md 的規則 2 條：本來就在 2 條，這次補回 0 條）')
+  expect(restoreSummary({ version: '', isCloud: false, total: 0, present: 0, added: 0 })).toContain('未知版本')
   expect(restoreSummary({ version: 'x', isCloud: true, total: 0, present: 0, added: 0 })).toContain('沒有套用到')
 })
 

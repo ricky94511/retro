@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { addCorrection, emptyLedger, markApplied, markSkipped, type Ledger } from '../hooks/lib/ledger'
-import { restorable, restoreText } from '../hooks/lib/restore'
+import { hasRule, restorable, restoreText } from '../hooks/lib/restore'
 
 let n = 0
 const fix = (l: Ledger, rule: string) =>
@@ -30,4 +30,11 @@ test('檔案不存在就新建；已經有的不重複補；都有了不寫檔',
   expect(restoreText('# 我的規則\n\n- 一\n', rules)).toBe('# 我的規則\n\n- 一\n- 二\n')
   expect(restoreText('- 一\n- 二\n', rules)).toBeNull()
   expect(restoreText(undefined, [])).toBeNull()
+})
+
+test('比對規則不管開頭的「- 」、空白與句尾標點', () => {
+  expect(hasRule('* 回覆一律用繁體中文。\n', '- 回覆一律用繁體中文')).toBe(true)
+  expect(hasRule('回覆 一律用繁體中文', '- 回覆一律用繁體中文。')).toBe(true)
+  expect(hasRule('- 回覆用英文', '- 回覆一律用繁體中文')).toBe(false)
+  expect(hasRule(undefined, '- 一')).toBe(false)
 })
